@@ -2,9 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { signInWithEmailAndPassword, signOut } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
-import { auth, db } from "./lib/client"; 
+import { signInWithEmailAndPassword } from "firebase/auth";
+import { auth } from "./lib/client"; // Kita cuma butuh auth sekarang, db dihapus
 import { useAuthLimit } from "./hooks/useAuthLimit";
 import ModalAlert from "./components/ModalAlert";
 import { FiEye, FiEyeOff } from "react-icons/fi"; 
@@ -20,46 +19,34 @@ export default function Login() {
   const { isLocked, cooldownText, trackFailedAttempt, resetAttempts, remainingAttempts } = useAuthLimit();
 
   const handleLogin = async (e) => {
-  e.preventDefault();
-  if (isLocked) return;
+    e.preventDefault();
+    if (isLocked) return;
 
-  setIsLoading(true);
-  console.log("Mulai proses login untuk:", email); // <--- TAMBAH INI
+    setIsLoading(true);
 
-  try {
-    const userCredential = await signInWithEmailAndPassword(auth, email, password);
-    const uid = userCredential.user.uid;
-    console.log("Firebase Auth Sukses, UID:", uid); // <--- TAMBAH INI
-
-    const userDocRef = doc(db, "users", uid);
-    const userDoc = await getDoc(userDocRef);
-
-    console.log("Cek Firestore..."); // <--- TAMBAH INI
-    
-    if (userDoc.exists()) {
-      console.log("Data user ditemukan:", userDoc.data()); // <--- TAMBAH INI
-      if (userDoc.data().role === "owner") {
-        resetAttempts();
-        router.push("/dashboard");
-      } else {
-        console.log("Role bukan owner!"); // <--- TAMBAH INI
-        await signOut(auth);
-        trackFailedAttempt();
-        setModal({ isOpen: true, message: "Bukan akun owner." });
+    try {
+      // Murni cek ke Firebase Auth saja, nggak peduli role-nya apa
+      await signInWithEmailAndPassword(auth, email, password);
+      
+      // Kalau berhasil login (nggak error), langsung lempar ke dashboard
+      resetAttempts();
+      router.push("/dashboard");
+      
+    } catch (err) {
+      trackFailedAttempt();
+      let errorMsg = "Email atau kata sandi salah. Silakan periksa kembali.";
+      
+      // Deteksi jika eror karena diblokir sistem lokal
+      if (remainingAttempts <= 1) {
+        errorMsg = "Terlalu banyak percobaan gagal. Akses formulir diblokir selama 5 menit.";
       }
-    } else {
-      console.log("Data user tidak ada di Firestore!"); // <--- TAMBAH INI
-      await signOut(auth);
-      setModal({ isOpen: true, message: "Data profil tidak ditemukan." });
+      
+      setModal({ isOpen: true, message: errorMsg });
+    } finally {
+      setIsLoading(false);
     }
-  } catch (err) {
-    console.error("Eror Firebase:", err); // <--- TAMBAH INI (Sangat penting buat debug)
-    trackFailedAttempt();
-    setModal({ isOpen: true, message: err.message });
-  } finally {
-    setIsLoading(false);
-  }
-};
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center relative overflow-hidden bg-slate-900">
       {/* Background Glow Effect */}
