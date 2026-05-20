@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { signInWithEmailAndPassword } from "firebase/auth";
-import { auth } from "./lib/client"; // Kita cuma butuh auth sekarang, db dihapus
+import { signInWithEmailAndPassword, onAuthStateChanged } from "firebase/auth";
+import { auth } from "./lib/client"; 
 import { useAuthLimit } from "./hooks/useAuthLimit";
 import ModalAlert from "./components/ModalAlert";
 import { FiEye, FiEyeOff } from "react-icons/fi"; 
@@ -12,11 +12,24 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isCheckingSession, setIsCheckingSession] = useState(true); // State screen loading session
   const [showPassword, setShowPassword] = useState(false);
   const [modal, setModal] = useState({ isOpen: false, message: "" });
 
   const router = useRouter();
   const { isLocked, cooldownText, trackFailedAttempt, resetAttempts, remainingAttempts } = useAuthLimit();
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        router.push("/dashboard");
+      } else {
+        setIsCheckingSession(false);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [router]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -25,27 +38,28 @@ export default function Login() {
     setIsLoading(true);
 
     try {
-      // Murni cek ke Firebase Auth saja, nggak peduli role-nya apa
       await signInWithEmailAndPassword(auth, email, password);
-      
-      // Kalau berhasil login (nggak error), langsung lempar ke dashboard
       resetAttempts();
       router.push("/dashboard");
-      
     } catch (err) {
       trackFailedAttempt();
       let errorMsg = "Email atau kata sandi salah. Silakan periksa kembali.";
-      
-      // Deteksi jika eror karena diblokir sistem lokal
       if (remainingAttempts <= 1) {
         errorMsg = "Terlalu banyak percobaan gagal. Akses formulir diblokir selama 5 menit.";
       }
-      
       setModal({ isOpen: true, message: errorMsg });
     } finally {
       setIsLoading(false);
     }
   };
+
+  if (isCheckingSession) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <p className="text-slate-400 text-sm animate-pulse">Menghubungkan ke sesi bengkel...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center relative overflow-hidden bg-slate-900">
@@ -67,8 +81,6 @@ export default function Login() {
 
           {/* Form Area */}
           <form onSubmit={handleLogin} className="space-y-6 text-left">
-            
-            {/* Input Email */}
             <div className="space-y-2">
               <label className="text-sm font-medium text-slate-300 ml-1" htmlFor="email">Email Address</label>
               <input
@@ -83,7 +95,6 @@ export default function Login() {
               />
             </div>
 
-            {/* Input Password */}
             <div className="space-y-2">
               <label className="text-sm font-medium text-slate-300 ml-1" htmlFor="password">Password</label>
               <div className="relative flex items-center">
@@ -107,25 +118,17 @@ export default function Login() {
               </div>
             </div>
 
-            {/* Submit Action */}
             <button
               type="submit"
               disabled={isLoading || isLocked}
               className="w-full relative overflow-hidden bg-blue-600 hover:bg-blue-500 text-white font-semibold py-4 rounded-xl transition duration-300 shadow-[0_0_20px_rgba(37,99,235,0.4)] disabled:bg-slate-800 disabled:text-slate-500 disabled:shadow-none disabled:cursor-not-allowed mt-8 text-lg flex items-center justify-center gap-2"
             >
-              {isLoading ? (
-                "Verifying Account..."
-              ) : isLocked ? (
-                `Locked (${cooldownText})`
-              ) : (
-                "Sign In to Dashboard"
-              )}
+              {isLoading ? "Verifying Account..." : isLocked ? `Locked (${cooldownText})` : "Sign In to Dashboard"}
             </button>
           </form>
         </div>
       </div>
 
-      {/* Render Alert Dialog */}
       <ModalAlert 
         isOpen={modal.isOpen} 
         onClose={() => setModal({ ...modal, isOpen: false })} 
