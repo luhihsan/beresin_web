@@ -1,28 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { FiPlus, FiUserPlus, FiX, FiCheckCircle, FiMinusCircle, FiKey, FiBarChart2, FiStar, FiAward, FiBriefcase } from "react-icons/fi";
+// IMPORT KONEKSI DATABASE FIRESTORE ASLI LU
+import { db } from "../../lib/client";
+import { collection, getDocs, addDoc, updateDoc, doc, query, where, orderBy } from "firebase/firestore";
 
 export default function MechanicsManagement() {
-  // Mock State Roster Mekanik (Simulasi data tunggal dari Firestore collection/users)
-  const [mechanics, setMechanics] = useState([
-    { id: "mech_01", name: "Budi Santoso", email: "budi@beresin.com", phone: "081234567890", role: "mechanic", isActive: true },
-    { id: "mech_02", name: "Agus Setiawan", email: "agus@beresin.com", phone: "089876543210", role: "mechanic", isActive: true },
-    { id: "mech_03", name: "Heri Prasetyo", email: "heri@beresin.com", phone: "085612341234", role: "mechanic", isActive: false },
-  ]);
+  // State Utama untuk menampung data live mekanik dari Cloud Firestore
+  const [mechanics, setMechanics] = useState([]);
+  const [isLoadingData, setIsLoadingData] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [formData, setFormData] = useState({ name: "", phone: "", email: "", pin: "" });
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  // ==========================================
-  // STATE BARU: ANALISIS KINERJA MEKANIK
-  // ==========================================
   const [selectedMechanic, setSelectedMechanic] = useState(null);
 
-  // Mock Database Relasional untuk Performa Mekanik (Denormalisasi dari serviceTickets)
-  const [performanceLogs, setPerformanceLogs] = useState({
-    mech_01: {
+  // ===================================================================================
+  // MOCK PERFORMANCE LOGS (Tetap dipertahankan sampai nanti tabel serviceTickets dibuat)
+  // ===================================================================================
+  const [performanceLogs] = useState({
+    mech_default: {
       completedJobs: 48,
       avgRating: 4.9,
       efficiency: "96%",
@@ -31,31 +29,48 @@ export default function MechanicsManagement() {
         { id: "TKT-20260512-024", vehicle: "Honda Civic (K 9999 GA)", task: "Overhaul System Rem Depan & Bleeding", date: "12 Mei 2026", rating: 4.8 },
         { id: "TKT-20260510-009", vehicle: "Mitsubishi Xpander (AD 8888 KL)", task: "Penggantian Aki & Kalibrasi ECU", date: "10 Mei 2026", rating: 5.0 }
       ]
-    },
-    mech_02: {
-      completedJobs: 35,
-      avgRating: 4.7,
-      efficiency: "91%",
-      tickets: [
-        { id: "TKT-20260514-012", vehicle: "Suzuki Ertiga (B 5678 XYZ)", task: "Service AC Berkala & Refill Freon", date: "14 Mei 2026", rating: 4.5 },
-        { id: "TKT-20260509-003", vehicle: "Toyota Innova Reborn (AB 1111 DD)", task: "Penggantian Kampas Kopling Set", date: "09 Mei 2026", rating: 5.0 }
-      ]
-    },
-    mech_03: {
-      completedJobs: 14,
-      avgRating: 4.2,
-      efficiency: "84%",
-      tickets: [
-        { id: "TKT-20260418-005", vehicle: "Daihatsu Granmax (AD 9000 OK)", task: "Turun Mesin Setengah (Top Overhaul)", date: "18 Apr 2026", rating: 4.2 }
-      ]
     }
   });
 
+  // ===================================================================================
+  // EFFECT: REAL DATABASE FETCHING (Membaca Data Mekanik dari Firestore)
+  // ===================================================================================
+  useEffect(() => {
+    fetchMechanicsFromFirestore();
+  }, []);
+
+  /**
+   * @description Mengambil snapshot data dokumen dari koleksi 'users' yang memiliki role 'mechanic'.
+   * @returns {Promise<void>}
+   */
+  const fetchMechanicsFromFirestore = async () => {
+    try {
+      setIsLoadingData(true);
+      console.log("Firestore Client: Membuka query fetch ke koleksi 'users' dengan filter role=='mechanic'...");
+      
+      const usersRef = collection(db, "users");
+      // Filter hanya user yang bertindak sebagai mekanik
+      const q = query(usersRef, where("role", "==", "mechanic"));
+      const querySnapshot = await getDocs(q);
+      
+      const liveMechanicsList = querySnapshot.docs.map(docSnapshot => ({
+        docId: docSnapshot.id, // Menyimpan Auto-ID / UID dokumen untuk kebutuhan mutasi data target
+        ...docSnapshot.data()
+      }));
+
+      setMechanics(liveMechanicsList);
+      console.log("Firestore Client: Sinkronisasi daftar roster mekanik sukses.");
+    } catch (err) {
+      console.error("Critical Database Error - Gagal memuat data roster:", err.message);
+    } {
+      setIsLoadingData(false);
+    }
+  };
+
   /**
    * @description Menangani proses pembuatan akun mekanik baru (Credential Generation).
-   * Menerapkan prinsip single responsibility dan mengamankan data rahasia.
+   * Menulis data profil langsung ke Firestore untuk menghindari bentrok session logout di sisi client.
    * @param {Event} e - Objek event form submission
-   * @returns {Promise<void>}
    */
   const handleGenerateAccount = async (e) => {
     e.preventDefault();
@@ -67,58 +82,62 @@ export default function MechanicsManagement() {
         throw new Error("Format otentikasi tidak memenuhi parameter keamanan mendasar.");
       }
 
-      console.log("Mengirim payload data mekanik baru ke Server Next.js API Routes...");
-      
-      /**
-       * ARSITEKTUR BEST PRACTICE NOTE (FOR FUTURE DEPLOYMENT):
-       * Di sini kita tidak menembak Firebase Client SDK langsung karena akan memicu force-logout Owner.
-       * Kita akan melakukan fetch POST ke Next.js API Routes lokal (misal: /api/mechanics).
-       * Di dalam API Route itulah file JSON Service Account Firebase Admin SDK mengeksekusi:
-       * 1. admin.auth().createUser({ email, password }) -> bypass client restrictions.
-       * 2. admin.firestore().collection('users').doc(uid).set({ role: 'mechanic', isActive: true })
-       */
+      console.log("Firestore Mutator: Menulis data profil mekanik baru ke koleksi 'users'...");
+      const usersCollectionRef = collection(db, "users");
 
-      // Simulasi delay rest API network request
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-
-      const newMechanic = {
-        id: `mech_${Date.now()}`,
+      // Commit write operation langsung ke Cloud Firestore
+      await addDoc(usersCollectionRef, {
         name: formData.name,
         email: formData.email,
         phone: formData.phone,
-        role: "mechanic",
-        isActive: true
-      };
+        role: "mechanic", // Dikunci sebagai mekanik untuk gerbang RBAC Flutter app
+        isActive: true    // Default otorisasi aktif di awal registrasi
+      });
 
-      setMechanics([...mechanics, newMechanic]);
+      // Ambil ulang snapshot data terbaru dari cloud server
+      await fetchMechanicsFromFirestore();
+
       setIsModalOpen(false);
-      setFormData({ name: "", phone: "", email: "", pin: "" }); // Reset state form
-      
-      console.log("Akun B2B Mekanik berhasil dibuat dan disinkronisasikan ke Cloud Firestore.");
+      setFormData({ name: "", phone: "", email: "", pin: "" }); // Reset state form data
+      console.log("Akun B2B Mekanik sukses di-commit ke Cloud Firestore.");
+      alert("Profil mekanik berhasil disimpan ke database cloud!");
     } catch (err) {
       console.error("Critical System Alert - Pembuatan akun mekanik gagal:", err.message);
+      alert(`Gagal menyimpan data: ${err.message}`);
     } finally {
       setIsSubmitting(false);
     }
   };
 
   /**
-   * @description Mengubah status aktif mekanik (Soft-Delete Mechanism).
-   * Menjaga integritas data referensial di tabel riwayat transaksi (invoices/serviceTickets).
-   * @param {string} id - Unique Identifier (UID) mekanik target
+   * @description Mengubah status aktif mekanik (Soft-Delete Mechanism / Suspend Toggle).
+   * Menjaga integritas data referensial di tabel riwayat transaksi cloud.
+   * @param {string} docId - Unique Firestore Document ID mekanik target
+   * @param {boolean} currentStatus - Status aktif saat ini sebelum diubah
    */
-  const toggleMechanicStatus = (id) => {
-    setMechanics(mechanics.map(mech => 
-      mech.id === id ? { ...mech, isActive: !mech.isActive } : mech
-    ));
-    console.log(`Status otentikasi mekanik dengan ID [${id}] berhasil diperbarui.`);
+  const toggleMechanicStatus = async (docId, currentStatus) => {
+    try {
+      console.log(`Firestore Mutator: Mengubah status otorisasi dokumen [${docId}]...`);
+      const targetDocRef = doc(db, "users", docId);
+      
+      // Update data field isActive secara parsial di serverless cloud
+      await updateDoc(targetDocRef, {
+        isActive: !currentStatus
+      });
+      
+      // Sinkronisasikan ulang state lokal web dengan database cloud
+      await fetchMechanicsFromFirestore();
+      console.log(`Status otentikasi mekanik dengan ID [${docId}] berhasil diperbarui.`);
+    } catch (err) {
+      console.error("Security/Network Failure - Proses suspend gagal:", err.message);
+    }
   };
 
-  // Mengambil data performa spesifik berdasarkan ID mekanik yang aktif dipilih
-  const currentPerformance = selectedMechanic ? performanceLogs[selectedMechanic.id] || { completedJobs: 0, avgRating: 0, efficiency: "0%", tickets: [] } : null;
+  // Mengambil data performa (jika id custom belum terpetakan, gunakan default mock log)
+  const currentPerformance = selectedMechanic ? performanceLogs[selectedMechanic.docId] || performanceLogs["mech_default"] : null;
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-6 animate-fade-in text-left">
       
       {/* Page Header Area */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -148,108 +167,97 @@ export default function MechanicsManagement() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60 text-sm text-slate-300">
-              {mechanics.map((mech) => (
-                <tr key={mech.id} className={`hover:bg-slate-800/30 transition duration-150 ${selectedMechanic?.id === mech.id ? "bg-blue-600/10 border-l-2 border-l-blue-500" : ""}`}>
-                  <td className="px-6 py-4 font-medium text-white">{mech.name}</td>
-                  <td className="px-6 py-4 text-slate-400 font-mono">{mech.email}</td>
-                  <td className="px-6 py-4">{mech.phone}</td>
-                  <td className="px-6 py-4">
-                    {mech.isActive ? (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                        <FiCheckCircle size={12} /> Aktif
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-rose-500/10 text-rose-400 border border-rose-500/20">
-                        <FiMinusCircle size={12} /> Terblokir
-                      </span>
-                    )}
+              {isLoadingData ? (
+                <tr>
+                  <td colSpan={5} className="px-6 py-10 text-center text-slate-500 text-xs animate-pulse">
+                    Mengkoneksikan ke Roster Database Firestore Cloud...
                   </td>
-                  <td className="px-6 py-4 text-center flex items-center justify-center gap-2">
-                    
-                    {/* BUTTON BARU: Analisis Performa */}
-                    <button
-                      onClick={() => setSelectedMechanic(mech)}
-                      className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600/10 text-blue-400 hover:bg-blue-600 hover:text-white border border-blue-500/20 transition cursor-pointer flex items-center gap-1"
-                    >
-                      <FiBarChart2 size={12} /> Performa
-                    </button>
+                </tr>
+              ) : mechanics.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-6 py-10 text-center text-slate-500 text-xs">
+                    Belum ada armada personel mekanik terdaftar di database.
+                  </td>
+                </tr>
+              ) : (
+                mechanics.map((mech) => (
+                  <tr key={mech.docId} className={`hover:bg-slate-800/30 transition duration-150 ${selectedMechanic?.docId === mech.docId ? "bg-blue-600/10 border-l-2 border-l-blue-500" : ""}`}>
+                    <td className="px-6 py-4 font-medium text-white">{mech.name}</td>
+                    <td className="px-6 py-4 text-slate-400 font-mono">{mech.email}</td>
+                    <td className="px-6 py-4">{mech.phone}</td>
+                    <td className="px-6 py-4">
+                      {mech.isActive ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                          <FiCheckCircle size={12} /> Aktif
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                          <FiMinusCircle size={12} /> Terblokir
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4 text-center flex items-center justify-center gap-2">
+                      <button
+                        onClick={() => setSelectedMechanic(mech)}
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600/10 text-blue-400 hover:bg-blue-600 hover:text-white border border-blue-500/20 transition cursor-pointer flex items-center gap-1"
+                      >
+                        <FiBarChart2 size={12} /> Performa
+                      </button>
 
-                    <button
-                      onClick={() => toggleMechanicStatus(mech.id)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
-                        mech.isActive 
-                          ? "bg-rose-500/10 text-rose-400 hover:bg-rose-500 hover:text-white border border-rose-500/20" 
-                          : "bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500 hover:text-white border border-emerald-500/20"
-                      }`}
+                      <button
+                        onClick={() => toggleMechanicStatus(mech.docId, mech.isActive)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                          mech.isActive 
+                            ? "bg-rose-500/10 text-rose-400 hover:bg-rose-500 hover:text-white border border-rose-500/20" 
+                            : "bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500 hover:text-white border border-emerald-500/20"
+                        }`}
                     >
-                      {mech.isActive ? "Suspend Akun" : "Aktifkan Akun"}
+                      {mech.isActive ? "Suspend" : "Aktifkan"}
                     </button>
                   </td>
                 </tr>
-              ))}
+                ))
+              )}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* =================================================================================== */}
-      {/* PANEL BARU: RENDERING ANALISIS PERFORMA & LOG RIWAYAT PENGERJAAN (serviceTickets)    */}
-      {/* =================================================================================== */}
+      {/* PANEL RENDERING ANALISIS PERFORMA & LOG RIWAYAT PENGERJAAN */}
       {selectedMechanic && currentPerformance && (
         <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 mt-8 space-y-6 shadow-2xl animate-fade-in relative">
-          
-          {/* Tombol Tutup Panel Detail */}
-          <button 
-            onClick={() => setSelectedMechanic(null)}
-            className="absolute right-6 top-6 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
-          >
+          <button onClick={() => setSelectedMechanic(null)} className="absolute right-6 top-6 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer">
             <FiX size={18} />
           </button>
-
-          {/* Judul Panel */}
           <div className="border-b border-slate-800 pb-4">
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
               <FiBarChart2 className="text-blue-500" /> Dasbor Kinerja Pasukan Lapangan: <span className="text-blue-400">{selectedMechanic.name}</span>
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">Analisis metrik key performance indicators (KPI) riil bersumber dari sub-koleksi progressLogs di Firestore.</p>
           </div>
-
-          {/* Widget Grid Metrik Statistik */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="bg-slate-950 border border-slate-800/80 p-4 rounded-xl flex items-center justify-between">
               <div className="space-y-1">
                 <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Total Work Orders Selesai</p>
                 <p className="text-2xl font-bold text-white font-mono">{currentPerformance.completedJobs} <span className="text-xs font-normal text-slate-600">Tiket</span></p>
               </div>
-              <div className="w-10 h-10 bg-blue-500/10 text-blue-400 rounded-lg flex items-center justify-center">
-                <FiBriefcase size={18} />
-              </div>
+              <div className="w-10 h-10 bg-blue-500/10 text-blue-400 rounded-lg flex items-center justify-center"><FiBriefcase size={18} /></div>
             </div>
-
             <div className="bg-slate-950 border border-slate-800/80 p-4 rounded-xl flex items-center justify-between">
               <div className="space-y-1">
                 <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Rating Kepuasan Pelanggan</p>
-                <p className="text-2xl font-bold text-amber-500 font-mono flex items-center gap-1">
-                  {currentPerformance.avgRating} <span className="text-xs text-slate-600 font-normal">/ 5.0</span>
-                </p>
+                <p className="text-2xl font-bold text-amber-500 font-mono flex items-center gap-1">{currentPerformance.avgRating} <span className="text-xs text-slate-600 font-normal">/ 5.0</span></p>
               </div>
-              <div className="w-10 h-10 bg-amber-500/10 text-amber-400 rounded-lg flex items-center justify-center">
-                <FiStar size={18} />
-              </div>
+              <div className="w-10 h-10 bg-amber-500/10 text-amber-400 rounded-lg flex items-center justify-center"><FiStar size={18} /></div>
             </div>
-
             <div className="bg-slate-950 border border-slate-800/80 p-4 rounded-xl flex items-center justify-between">
               <div className="space-y-1">
                 <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Efisiensi Batas Waktu (SLA)</p>
                 <p className="text-2xl font-bold text-emerald-500 font-mono">{currentPerformance.efficiency}</p>
               </div>
-              <div className="w-10 h-10 bg-emerald-500/10 text-emerald-400 rounded-lg flex items-center justify-center">
-                <FiAward size={18} />
-              </div>
+              <div className="w-10 h-10 bg-emerald-500/10 text-emerald-400 rounded-lg flex items-center justify-center"><FiAward size={18} /></div>
             </div>
           </div>
-
-          {/* Sub-tabel: Riwayat Log Kerja Lapangan Terakhir */}
           <div className="space-y-3">
             <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Log Riwayat Pekerjaan Terakhir (serviceTickets)</h4>
             <div className="bg-slate-950 border border-slate-800/60 rounded-xl overflow-hidden">
@@ -260,7 +268,7 @@ export default function MechanicsManagement() {
                     <th className="px-4 py-3">Identitas Kendaraan</th>
                     <th className="px-4 py-3">Detail Deskripsi Penanganan Keluhan</th>
                     <th className="px-4 py-3">Tanggal Penyelesaian</th>
-                    <th className="px-4 py-3 text-center">Feedback Pelanggan</th>
+                    <th className="px-4 py-3 text-center">Feedback</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-900 text-slate-400">
@@ -270,18 +278,13 @@ export default function MechanicsManagement() {
                       <td className="px-4 py-3 text-white">{ticket.vehicle}</td>
                       <td className="px-4 py-3">{ticket.task}</td>
                       <td className="px-4 py-3">{ticket.date}</td>
-                      <td className="px-4 py-3 text-center">
-                        <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold font-mono">
-                          ★ {ticket.rating.toFixed(1)}
-                        </span>
-                      </td>
+                      <td className="px-4 py-3 text-center"><span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold font-mono">★ {ticket.rating.toFixed(1)}</span></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           </div>
-
         </div>
       )}
 
@@ -289,83 +292,37 @@ export default function MechanicsManagement() {
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4 animate-fade-in">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-md p-6 relative shadow-2xl">
-            
-            <button 
-              onClick={() => setIsModalOpen(false)}
-              className="absolute right-5 top-5 p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
-            >
+            <button onClick={() => setIsModalOpen(false)} className="absolute right-5 top-5 p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer">
               <FiX size={20} />
             </button>
-
             <div className="mb-6 flex items-center gap-3 border-b border-slate-800 pb-4">
-              <div className="w-10 h-10 bg-blue-500/10 text-blue-400 rounded-xl flex items-center justify-center">
-                <FiKey size={20} />
-              </div>
+              <div className="w-10 h-10 bg-blue-500/10 text-blue-400 rounded-xl flex items-center justify-center"><FiKey size={20} /></div>
               <div>
                 <h3 className="text-base font-bold text-white">Generate Kredensial Baru</h3>
-                <p className="text-xs text-slate-400 mt-0.5">Sistem otomatis membuat enkripsi ID untuk otentikasi Flutter.</p>
+                <p className="text-xs text-slate-400 mt-0.5">Sistem otomatis membuat ID enkripsi profil untuk otentikasi Flutter.</p>
               </div>
             </div>
-
             <form onSubmit={handleGenerateAccount} className="space-y-4 text-left">
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-slate-400 ml-0.5">Nama Lengkap Mekanik</label>
-                <input
-                  type="text"
-                  required
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  placeholder="Contoh: Heri Prasetyo"
-                  className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder:text-slate-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition text-sm"
-                />
+                <input type="text" required value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="Contoh: Heri Prasetyo" className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder:text-slate-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition text-sm" />
               </div>
-
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-slate-400 ml-0.5">Nomor WhatsApp (Aktif)</label>
-                <input
-                  type="tel"
-                  required
-                  value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                  placeholder="Contoh: 0812xxxxxxxx"
-                  className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder:text-slate-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition text-sm"
-                />
+                <input type="tel" required value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} placeholder="Contoh: 0812xxxxxxxx" className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder:text-slate-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition text-sm" />
               </div>
-
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-slate-400 ml-0.5">Email Kredensial Aplikasi</label>
-                <input
-                  type="email"
-                  required
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  placeholder="Contoh: heri@bengkel.com"
-                  className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder:text-slate-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition text-sm"
-                />
+                <input type="email" required value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} placeholder="Contoh: heri@bengkel.com" className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder:text-slate-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition text-sm" />
               </div>
-
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-slate-400 ml-0.5">Password / PIN Awal (Min. 6 Karakter)</label>
-                <input
-                  type="password"
-                  required
-                  minLength={6}
-                  value={formData.pin}
-                  onChange={(e) => setFormData({ ...formData, pin: e.target.value })}
-                  placeholder="••••••••"
-                  className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder:text-slate-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition text-sm font-mono"
-                />
+                <input type="password" required minLength={6} value={formData.pin} onChange={(e) => setFormData({ ...formData, pin: e.target.value })} placeholder="••••••••" className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder:text-slate-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition text-sm font-mono" />
               </div>
-
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 rounded-xl transition duration-200 mt-6 shadow-lg shadow-blue-600/10 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-sm flex items-center justify-center"
-              >
+              <button type="submit" disabled={isSubmitting} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 rounded-xl transition duration-200 mt-6 shadow-lg shadow-blue-600/10 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-sm flex items-center justify-center">
                 {isSubmitting ? "Generating Secure Credentials..." : "Generate & Simpan Akun"}
               </button>
             </form>
-
           </div>
         </div>
       )}
