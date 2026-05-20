@@ -1,67 +1,101 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { FiFileText, FiDollarSign, FiCreditCard, FiCheckCircle, FiXCircle, FiDownload, FiSearch, FiEye, FiFilter, FiPaperclip, FiImage } from "react-icons/fi";
-
 import { exportInvoicesToCSV } from "../../utils/exportHelper";
+import { db } from "../../lib/client";
+import { collection, getDocs, updateDoc, doc, query, orderBy } from "firebase/firestore";
 
 export default function InvoicesManagement() {
-  // Mock State Database Finansial (SUNTIKAN DATA BARU: externalProcurements untuk pelacakan nota luar)
-  const [invoices, setInvoices] = useState([
-    { 
-      id: "INV-20260520-001", 
-      customerName: "Galuh Ihsan", 
-      plateNumber: "AD 2345 GL", 
-      date: "20 Mei 2026", 
-      amount: 685000, 
-      method: "QRIS (Midtrans)", 
-      isPaid: true,
-      // Array data lampiran nota luar hasil input dari aplikasi Flutter mekanik
-      externalProcurements: [
-        { partName: "Ring Piston Avanza 2015", supplierStore: "Toko Sumber Rejeki Motor", cost: 350000, receiptPhotoUrl: "https://placehold.co/400x300?text=Nota+Ring+Piston" }
-      ]
-    },
-    { 
-      id: "INV-20260520-002", 
-      customerName: "Bambang Pamungkas", 
-      plateNumber: "B 1234 ABC", 
-      date: "20 Mei 2026", 
-      amount: 950000, 
-      method: "Cash", 
-      isPaid: false,
-      externalProcurements: [] // Kosong jika mekanik murni memakai stok sparepart internal gudang
-    },
-    { 
-      id: "INV-20260519-045", 
-      customerName: "Dewi Lestari", 
-      plateNumber: "K 8888 AA", 
-      date: "19 Mei 2026", 
-      amount: 3800000, 
-      method: "Transfer Bank", 
-      isPaid: true,
-      externalProcurements: [
-        { partName: "Evaporator AC Denso Original", supplierStore: "Sentosa AC Mobil", cost: 1200000, receiptPhotoUrl: "https://placehold.co/400x300?text=Nota+Evaporator+Denso" }
-      ]
-    },
-    { id: "INV-20260518-012", customerName: "Ahmad Subarjo", plateNumber: "AD 4412 KL", date: "18 Mei 2026", amount: 120000, method: "Cash", isPaid: true, externalProcurements: [] },
-  ]);
+  // State Utama Basis Data Live dari Firestore
+  const [invoices, setInvoices] = useState([]);
+  const [isLoadingData, setIsLoadingData] = useState(true);
 
+  // State Utilitas Kontrol UI Filter, Search & Modal
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all"); 
   const [selectedInvoice, setSelectedInvoice] = useState(null);
 
+  // EFFECT & FETCHING LOGIC: MEMBACA LIVE DATA INVOICE DARI CLOUD
+  useEffect(() => {
+    fetchInvoicesFromFirestore();
+  }, []);
+
+  /**
+   * @description Utility internal untuk mengonversi objek Timestamp Firebase ({seconds, nanoseconds}) 
+   * menjadi string tanggal terformat Indonesia yang aman dirender oleh React.
+   */
+  const formatFirestoreDate = (rawDate) => {
+    if (!rawDate) return "-";
+    if (typeof rawDate === "object" && "seconds" in rawDate) {
+      return new Date(rawDate.seconds * 1000).toLocaleDateString("id-ID", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric"
+      });
+    }
+    return String(rawDate);
+  };
+
+  /**
+   * @description Mengambil snapshot data dokumen dari koleksi 'invoices' di Cloud Firestore.
+   */
+  const fetchInvoicesFromFirestore = async () => {
+    try {
+      setIsLoadingData(true);
+      console.log("Firestore Finance: Menarik entri dokumen pembukuan dari koleksi 'invoices'...");
+      
+      const invoicesRef = collection(db, "invoices");
+      const querySnapshot = await getDocs(invoicesRef);
+      
+      const liveInvoicesList = querySnapshot.docs.map(docSnapshot => {
+        const rawData = docSnapshot.data();
+        return {
+          docId: docSnapshot.id, // ID Dokumen untuk target update settlement lunas
+          ...rawData,
+          // TAMENG PENGAMAN: Konversi field date jika di database diset sebagai timestamp
+          date: formatFirestoreDate(rawData.date)
+        };
+      });
+
+      setInvoices(liveInvoicesList);
+      console.log("Firestore Finance: Sinkronisasi lembar ledger akuntansi sukses.");
+    } catch (err) {
+      console.error("Critical Accounting Error - Gagal memuat data finansial:", err.message);
+    } finally {
+      setIsLoadingData(false);
+    }
+  };
+
   /**
    * @description Melakukan verifikasi otorisasi pembayaran manual (Settlement).
    * Hanya akun berhak akses Owner/Kasir yang diizinkan merubah status finansial dokumen ini.
-   * @param {string} id - Unique Invoice ID (Primary Key)
+   * @param {string} docId - Unique Firestore Document ID Target
+   * @param {string} customInvoiceId - ID Invoice Human Readable (Contoh: INV-001) untuk keperluan log audit
    */
-  const handleVerifyPayment = (id) => {
-    setInvoices(invoices.map(inv => 
-      inv.id === id ? { ...inv, isPaid: true } : inv
-    ));
-    console.log(`Audit Trail Log - Settlement Sukses: Invoice [${id}] telah diverifikasi LUNAS oleh Owner.`);
-    if (selectedInvoice && selectedInvoice.id === id) {
-      setSelectedInvoice({ ...selectedInvoice, isPaid: true });
+  const handleVerifyPayment = async (docId, customInvoiceId) => {
+    try {
+      console.log(`Firestore Finance: Mengarsip settlement lunas untuk dokumen [${docId}]...`);
+      const targetDocRef = doc(db, "invoices", docId);
+      
+      // Update status pembayaran menjadi TRUE langsung di Cloud Server
+      await updateDoc(targetDocRef, {
+        isPaid: true
+      });
+
+      // Sinkronisasikan ulang local state agar tampilan otomatis ter-refresh data aslinya
+      await fetchInvoicesFromFirestore();
+
+      // Update state modal detail jika kebetulan sedang dibuka biar statusnya ikut berubah lunas
+      if (selectedInvoice && selectedInvoice.docId === docId) {
+        setSelectedInvoice({ ...selectedInvoice, isPaid: true });
+      }
+
+      console.log(`Audit Trail Log - Settlement Sukses: Invoice [${customInvoiceId}] dinyatakan LUNAS.`);
+      alert(`Invoice ${customInvoiceId} berhasil diverifikasi LUNAS!`);
+    } catch (err) {
+      console.error("Security/Network Failure - Otorisasi pelunasan gagal:", err.message);
+      alert(`Gagal memproses pelunasan: ${err.message}`);
     }
   };
 
@@ -72,14 +106,21 @@ export default function InvoicesManagement() {
 
   // LOGIKA FILTERING & SEARCHING DATA (Computed State)
   const filteredInvoices = invoices.filter(inv => {
-    const matchesSearch = inv.customerName.toLowerCase().includes(searchQuery.toLowerCase()) || inv.id.toLowerCase().includes(searchQuery.toLowerCase()) || inv.plateNumber.toLowerCase().includes(searchQuery.toLowerCase());
+    const customerNameSafe = inv.customerName || "";
+    const idSafe = inv.id || "";
+    const plateNumberSafe = inv.plateNumber || "";
+
+    const matchesSearch = customerNameSafe.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                          idSafe.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                          plateNumberSafe.toLowerCase().includes(searchQuery.toLowerCase());
+                          
     const matchesStatus = statusFilter === "all" ? true : statusFilter === "paid" ? inv.isPaid : !inv.isPaid;
     return matchesSearch && matchesStatus;
   });
 
-  // AGREGASI METRIK KEUANGAN SECARA REAL-TIME
-  const totalRevenue = invoices.filter(inv => inv.isPaid).reduce((acc, curr) => acc + curr.amount, 0);
-  const pendingRevenue = invoices.filter(inv => !inv.isPaid).reduce((acc, curr) => acc + curr.amount, 0);
+  // AGREGASI METRIK KEUANGAN SECARA REAL-TIME DARI DATA LIVE FIRESTORE
+  const totalRevenue = invoices.filter(inv => inv.isPaid).reduce((acc, curr) => acc + (curr.amount || 0), 0);
+  const pendingRevenue = invoices.filter(inv => !inv.isPaid).reduce((acc, curr) => acc + (curr.amount || 0), 0);
 
   return (
     <div className="space-y-6 animate-fade-in text-left">
@@ -104,7 +145,9 @@ export default function InvoicesManagement() {
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex items-center justify-between">
           <div className="space-y-1">
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Kas Masuk (Lunas)</p>
-            <h3 className="text-2xl font-bold text-emerald-400 font-mono tracking-tight">{formatRupiah(totalRevenue)}</h3>
+            <h3 className="text-2xl font-bold text-emerald-400 font-mono tracking-tight">
+              {isLoadingData ? "Rp ..." : formatRupiah(totalRevenue)}
+            </h3>
           </div>
           <div className="w-10 h-10 bg-emerald-500/10 text-emerald-400 rounded-xl flex items-center justify-center border border-emerald-500/20">
             <FiDollarSign size={20} />
@@ -114,7 +157,9 @@ export default function InvoicesManagement() {
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex items-center justify-between">
           <div className="space-y-1">
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Piutang Menunggu (Pending)</p>
-            <h3 className="text-2xl font-bold text-amber-500 font-mono tracking-tight">{formatRupiah(pendingRevenue)}</h3>
+            <h3 className="text-2xl font-bold text-amber-500 font-mono tracking-tight">
+              {isLoadingData ? "Rp ..." : formatRupiah(pendingRevenue)}
+            </h3>
           </div>
           <div className="w-10 h-10 bg-amber-500/10 text-amber-400 rounded-xl flex items-center justify-center border border-amber-500/20">
             <FiCreditCard size={20} />
@@ -124,7 +169,9 @@ export default function InvoicesManagement() {
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex items-center justify-between sm:col-span-2 lg:col-span-1">
           <div className="space-y-1">
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Nilai Faktur Terbit</p>
-            <h3 className="text-2xl font-bold text-white font-mono tracking-tight">{formatRupiah(totalRevenue + pendingRevenue)}</h3>
+            <h3 className="text-2xl font-bold text-white font-mono tracking-tight">
+              {isLoadingData ? "Rp ..." : formatRupiah(totalRevenue + pendingRevenue)}
+            </h3>
           </div>
           <div className="w-10 h-10 bg-blue-500/10 text-blue-400 rounded-xl flex items-center justify-center border border-blue-500/20">
             <FiFileText size={20} />
@@ -132,7 +179,7 @@ export default function InvoicesManagement() {
         </div>
       </div>
 
-      {/* Control Bar (Search & Filter Sytems) */}
+      {/* Control Bar (Search & Filter Systems) */}
       <div className="flex flex-col md:flex-row gap-4 items-center justify-between bg-slate-900 p-4 rounded-xl border border-slate-800/80">
         <div className="relative w-full md:max-w-md flex items-center">
           <FiSearch className="absolute left-4 text-slate-600" size={18} />
@@ -187,49 +234,68 @@ export default function InvoicesManagement() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60 text-sm text-slate-300">
-              {filteredInvoices.map((inv) => (
-                <tr key={inv.id} className="hover:bg-slate-800/30 transition duration-150">
-                  <td className="px-6 py-4 font-mono font-bold text-slate-200">{inv.id}</td>
-                  <td className="px-6 py-4 font-medium text-white">{inv.customerName}</td>
-                  <td className="px-6 py-4"><span className="bg-slate-950 border border-slate-800 px-2 py-1 rounded font-mono font-bold text-xs tracking-wider text-slate-300">{inv.plateNumber}</span></td>
-                  <td className="px-6 py-4 text-slate-400">{inv.date}</td>
-                  <td className="px-6 py-4 font-mono font-bold text-white">{formatRupiah(inv.amount)}</td>
-                  <td className="px-6 py-4 text-slate-400 text-xs">{inv.method}</td>
-                  <td className="px-6 py-4 text-center">
-                    {inv.isPaid ? (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                        Lunas
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse">
-                        Belum Bayar
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4 text-center flex items-center justify-center gap-2">
-                    <button
-                      onClick={() => setSelectedInvoice(inv)}
-                      className="p-1.5 rounded-lg bg-slate-950 text-slate-400 hover:text-white border border-slate-800 transition cursor-pointer"
-                    >
-                      <FiEye size={14} />
-                    </button>
-                    {!inv.isPaid && (
-                      <button
-                        onClick={() => handleVerifyPayment(inv.id)}
-                        className="px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500 hover:text-white transition cursor-pointer"
-                      >
-                        Set Lunas
-                      </button>
-                    )}
+              {isLoadingData ? (
+                <tr>
+                  <td colSpan={8} className="px-6 py-10 text-center text-slate-500 text-xs animate-pulse">
+                    Mengunduh Berkas Ledger Keuangan dari Cloud Firestore...
                   </td>
                 </tr>
-              ))}
+              ) : filteredInvoices.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-6 py-10 text-center text-slate-500 text-xs">
+                    Tidak ditemukan rekaman invoice faktur yang cocok dengan database.
+                  </td>
+                </tr>
+              ) : (
+                filteredInvoices.map((inv) => (
+                  <tr key={inv.docId} className="hover:bg-slate-800/30 transition duration-150">
+                    <td className="px-6 py-4 font-mono font-bold text-slate-200">{inv.id}</td>
+                    <td className="px-6 py-4 font-medium text-white">{inv.customerName}</td>
+                    <td className="px-6 py-4">
+                      <span className="bg-slate-950 border border-slate-800 px-2 py-1 rounded font-mono font-bold text-xs tracking-wider text-slate-300">
+                        {inv.plateNumber}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-slate-400">{inv.date}</td>
+                    <td className="px-6 py-4 font-mono font-bold text-white">{formatRupiah(inv.amount || 0)}</td>
+                    <td className="px-6 py-4 text-slate-400 text-xs">{inv.method || "Cash"}</td>
+                    <td className="px-6 py-4 text-center">
+                      {inv.isPaid ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                          Lunas
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse">
+                          Belum Bayar
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4 text-center flex items-center justify-center gap-2">
+                      <button
+                        onClick={() => setSelectedInvoice(inv)}
+                        className="p-1.5 rounded-lg bg-slate-950 text-slate-400 hover:text-white border border-slate-800 transition cursor-pointer"
+                        title="Lihat Rincian Faktur & Nota Belanja"
+                      >
+                        <FiEye size={14} />
+                      </button>
+                      {!inv.isPaid && (
+                        <button
+                          onClick={() => handleVerifyPayment(inv.docId, inv.id)}
+                          className="px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500 hover:text-white transition cursor-pointer"
+                        >
+                          Set Lunas
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* MODAL OVERLAY: RINCIAN DETAIL INVOICE */}
+      {/* MODAL OVERLAY: RINCIAN DETAIL INVOICE & REIMBURSEMENT NOTA LUAR */}
       {selectedInvoice && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4 animate-fade-in">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-xl p-6 relative shadow-2xl max-h-[90vh] overflow-y-auto">
@@ -242,7 +308,7 @@ export default function InvoicesManagement() {
               <h3 className="text-base font-mono font-bold text-white mt-0.5">{selectedInvoice.id}</h3>
             </div>
 
-            {/* Grid Informasi Ringkas */}
+            {/* Grid Informasi Rincian Utama */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs mb-6">
               <div className="flex justify-between bg-slate-950 p-3 rounded-xl border border-slate-800/60">
                 <span className="text-slate-500">Nama Pemilik</span>
@@ -258,13 +324,11 @@ export default function InvoicesManagement() {
               </div>
               <div className="flex justify-between bg-slate-950 p-3 rounded-xl border border-slate-800/60">
                 <span className="text-slate-500">Metode Pembayaran</span>
-                <span className="text-slate-300">{selectedInvoice.method}</span>
+                <span className="text-slate-300">{selectedInvoice.method || "Cash"}</span>
               </div>
             </div>
 
-            {/* =================================================================================== */}
-            {/* SUB-COMPONEN BARU: REKONSILIASI NOTA PENGADAAN SPAREPART LUAR                      */}
-            {/* =================================================================================== */}
+            {/* TABLE SUB-KOMPONEN: LAPORAN REIMBURSEMENT NOTA BELANJA LUAR MEKANIK */}
             <div className="space-y-3 mb-6 text-left">
               <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
                 <FiPaperclip className="text-blue-500" /> Lampiran Pengadaan Suku Cadang Luar (Reimbursement)
@@ -272,7 +336,7 @@ export default function InvoicesManagement() {
               
               {!selectedInvoice.externalProcurements || selectedInvoice.externalProcurements.length === 0 ? (
                 <div className="bg-slate-950/40 border border-slate-800/60 rounded-xl p-4 text-center">
-                  <p className="text-xs text-slate-600">Seluruh sparepart menggunakan stok internal gudang resmi bengkel.</p>
+                  <p className="text-xs text-slate-600">Seluruh sparepart murni dibeli sendiri oleh pelanggan atau menggunakan jasa servis murni.</p>
                 </div>
               ) : (
                 <div className="bg-slate-950 border border-slate-800/60 rounded-xl overflow-hidden">
@@ -290,7 +354,7 @@ export default function InvoicesManagement() {
                         <tr key={idx} className="hover:bg-slate-900/20">
                           <td className="px-4 py-3 font-medium text-slate-200">{proc.partName}</td>
                           <td className="px-4 py-3 text-slate-400">{proc.supplierStore}</td>
-                          <td className="px-4 py-3 font-mono text-white">{formatRupiah(proc.cost)}</td>
+                          <td className="px-4 py-3 font-mono text-white">{formatRupiah(proc.cost || 0)}</td>
                           <td className="px-4 py-3 text-center">
                             <a 
                               href={proc.receiptPhotoUrl} 
@@ -309,13 +373,13 @@ export default function InvoicesManagement() {
               )}
             </div>
 
-            {/* Total Billing Frame */}
+            {/* Total Billing Block */}
             <div className="flex justify-between bg-slate-950 p-4 rounded-xl border border-slate-800/60 items-center mb-6 text-xs">
-              <span className="text-slate-500 font-medium text-sm">Total Akumulasi Tagihan Pelanggan</span>
-              <span className="text-base font-bold font-mono text-emerald-400">{formatRupiah(selectedInvoice.amount)}</span>
+              <span className="text-slate-500 font-medium text-sm">Total Akumulasi Tagihan Konsumen</span>
+              <span className="text-base font-bold font-mono text-emerald-400">{formatRupiah(selectedInvoice.amount || 0)}</span>
             </div>
 
-            {/* Status & Quick Action Panel */}
+            {/* Bottom Status Action Bar */}
             <div className="pt-4 border-t border-slate-800/80 flex items-center justify-between text-xs">
               <div>
                 <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Status Faktur Saat Ini</p>
@@ -325,7 +389,7 @@ export default function InvoicesManagement() {
               </div>
               {!selectedInvoice.isPaid && (
                 <button 
-                  onClick={() => handleVerifyPayment(selectedInvoice.id)} 
+                  onClick={() => handleVerifyPayment(selectedInvoice.docId, selectedInvoice.id)} 
                   className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 px-4 rounded-xl text-xs transition cursor-pointer shadow-lg shadow-emerald-600/10"
                 >
                   Otorisasi Lunas
