@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { signOut, onAuthStateChanged } from "firebase/auth";
 import { auth } from "../lib/client";
-import { FiHome, FiUsers, FiTool, FiFileText, FiSettings, FiLogOut, FiAlertTriangle, FiBell, FiDollarSign, FiLayers } from "react-icons/fi";
+import { FiHome, FiUsers, FiTool, FiFileText, FiSettings, FiLogOut, FiAlertTriangle, FiBell, FiDollarSign, FiLayers, FiPaperclip, FiSmartphone } from "react-icons/fi";
 
 export default function DashboardLayout({ children }) {
   const [loading, setLoading] = useState(true);
@@ -13,10 +13,38 @@ export default function DashboardLayout({ children }) {
   const pathname = usePathname();
   const router = useRouter();
 
-  // LIVE NOTIFICATION CENTER FOR CASH SETTLEMENT
+  // LIVE NOTIFICATION CENTER WITH DEEP LINKING ROUTE REGISTRY
   const [isNotifOpen, setIsNotifOpen] = useState(false);
+  
+  // SINKRONISASI STRUKTUR: Pastikan properti type dan redirectUrl ada di setiap objek
   const [notifications, setNotifications] = useState([
-    { id: "nt_01", invoiceId: "INV-20260520-002", text: "Bambang Pamungkas melakukan pembayaran Cash. Butuh otorisasi finansial.", time: "5 mnt lalu", unread: true }
+    { 
+      id: "nt_01", 
+      type: "cash_settlement",
+      invoiceId: "INV-20260520-002", 
+      text: "Bambang Pamungkas melakukan pembayaran Cash. Butuh otorisasi finansial.", 
+      time: "2 mnt lalu", 
+      unread: true,
+      redirectUrl: "/dashboard/invoices?open=INV-20260520-002" // Link rute target
+    },
+    { 
+      id: "nt_02", 
+      type: "parts_approval",
+      invoiceId: "INV-20260520-001", 
+      text: "Mekanik Budi Santoso mengajukan reimbursement nota Ring Piston Avanza (AD 2345 GL).", 
+      time: "15 mnt lalu", 
+      unread: true,
+      redirectUrl: "/dashboard/invoices?open=INV-20260520-001"
+    },
+    { 
+      id: "nt_03", 
+      type: "android_booking",
+      invoiceId: null, 
+      text: "Booking Antrean Baru dari Android: Ahmad Yani (Honda Civic - AD 9999 IH).", 
+      time: "1 jam lalu", 
+      unread: false,
+      redirectUrl: "/dashboard" // Diarahkan langsung ke halaman monitor beranda utama
+    }
   ]);
 
   useEffect(() => {
@@ -39,7 +67,31 @@ export default function DashboardLayout({ children }) {
     }
   };
 
-  const markNotificationsAsRead = () => {
+  /**
+   * @description Menangani aksi klik pada item notifikasi.
+   * Menyertakan tameng pengaman defensive code guard mencegah crash startsWith Next.js.
+   */
+  const handleNotificationActionClick = (notif) => {
+    // 1. Mutasi status unread khusus untuk item ID target
+    setNotifications(notifications.map(n => n.id === notif.id ? { ...n, unread: false } : n));
+    
+    // 2. Tutup panel layang dropdown topbar
+    setIsNotifOpen(false);
+    
+    // ===================================================================================
+    // TAMENG PENGAMAN (DEFENSIVE GUARD): Cek apakah link tujuan ada atau tidak
+    // ===================================================================================
+    if (!notif || !notif.redirectUrl) {
+      console.warn("Deep Link Aborted: Objek notifikasi tidak memiliki parameter redirectUrl.");
+      return; // Stop eksekusi agar tidak menembak router.push(undefined) yang pemicu error
+    }
+    
+    // 3. Eksekusi Router Deep-linking pindah halaman bawaan Next.js
+    console.log(`System Router Navigating Deep-Link Destination: ${notif.redirectUrl}`);
+    router.push(notif.redirectUrl);
+  };
+
+  const markAllAsReadLayout = () => {
     setNotifications(notifications.map(n => ({ ...n, unread: false })));
     setIsNotifOpen(!isNotifOpen);
   };
@@ -79,12 +131,9 @@ export default function DashboardLayout({ children }) {
           <Link href="/dashboard/customers" className={`flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all duration-200 ${isActive("/dashboard/customers") ? "bg-blue-600 text-white shadow-lg shadow-blue-600/10" : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"}`}>
             <FiUsers size={18} /> Pelanggan
           </Link>
-          
-          {/* MENU KATALOG JASA SEKARANG SUDAH ADA DI SINI */}
           <Link href="/dashboard/services" className={`flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all duration-200 ${isActive("/dashboard/services") ? "bg-blue-600 text-white shadow-lg shadow-blue-600/10" : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"}`}>
             <FiLayers size={18} /> Katalog Jasa
           </Link>
-
           <Link href="/dashboard/invoices" className={`flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all duration-200 ${isActive("/dashboard/invoices") ? "bg-blue-600 text-white shadow-lg shadow-blue-600/10" : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"}`}>
             <FiFileText size={18} /> Finansial
           </Link>
@@ -107,7 +156,7 @@ export default function DashboardLayout({ children }) {
           
           <div className="flex items-center gap-6">
             <div className="relative">
-              <button onClick={markNotificationsAsRead} className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl transition relative cursor-pointer border border-slate-700/50">
+              <button onClick={markAllAsReadLayout} className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl transition relative cursor-pointer border border-slate-700/50">
                 <FiBell size={18} />
                 {unreadCount > 0 && (
                   <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center animate-bounce">
@@ -116,22 +165,45 @@ export default function DashboardLayout({ children }) {
                 )}
               </button>
 
+              {/* DROPDOWN FLYOUT NOTIFIKASI */}
               {isNotifOpen && (
-                <div className="absolute right-0 mt-3 w-80 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-4 space-y-3 z-50 animate-fade-in text-left">
+                <div className="absolute right-0 mt-3 w-85 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-4 space-y-3 z-50 animate-fade-in text-left max-h-[450px] overflow-y-auto">
                   <div className="border-b border-slate-800 pb-2">
-                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Otorisasi Pembayaran Pending</h4>
+                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Pusat Aktivitas Operasional</h4>
                   </div>
                   {notifications.length === 0 ? (
-                    <p className="text-xs text-slate-600 text-center py-2">Tidak ada alert otorisasi baru.</p>
+                    <p className="text-xs text-slate-600 text-center py-2">Tidak ada pemberitahuan baru.</p>
                   ) : (
                     <div className="space-y-2">
                       {notifications.map(n => (
-                        <div key={n.id} className="p-2.5 bg-slate-950 rounded-xl border border-slate-800/80 flex gap-3 items-start">
-                          <div className="w-7 h-7 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 mt-0.5">
-                            <FiDollarSign size={14} />
-                          </div>
-                          <div className="space-y-1">
-                            <p className="text-xs text-slate-200 leading-relaxed"><span className="font-mono font-bold text-blue-400">{n.invoiceId}</span>: {n.text}</p>
+                        <div 
+                          key={n.id} 
+                          onClick={() => handleNotificationActionClick(n)}
+                          className={`p-2.5 rounded-xl border transition cursor-pointer flex gap-3 items-start relative ${n.unread ? "bg-slate-800/40 border-slate-700 hover:bg-slate-800" : "bg-slate-950 border-slate-800/80 hover:bg-slate-900/50"}`}
+                        >
+                          {n.unread && <span className="absolute top-3.5 right-3 w-1.5 h-1.5 bg-blue-500 rounded-full"></span>}
+
+                          {n.type === "cash_settlement" && (
+                            <div className="w-7 h-7 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 mt-0.5">
+                              <FiDollarSign size={14} />
+                            </div>
+                          )}
+                          {n.type === "parts_approval" && (
+                            <div className="w-7 h-7 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 flex items-center justify-center shrink-0 mt-0.5">
+                              <FiPaperclip size={14} />
+                            </div>
+                          )}
+                          {n.type === "android_booking" && (
+                            <div className="w-7 h-7 rounded-lg bg-purple-500/10 border border-purple-500/20 text-purple-400 flex items-center justify-center shrink-0 mt-0.5">
+                              <FiSmartphone size={14} />
+                            </div>
+                          )}
+
+                          <div className="space-y-0.5 pr-3">
+                            <p className={`text-xs leading-relaxed ${n.unread ? "text-white font-medium" : "text-slate-400"}`}>
+                              {n.invoiceId && <span className="font-mono font-bold text-blue-400 mr-1">{n.invoiceId}</span>}
+                              {n.text}
+                            </p>
                             <p className="text-[10px] text-slate-500 font-medium">{n.time}</p>
                           </div>
                         </div>
