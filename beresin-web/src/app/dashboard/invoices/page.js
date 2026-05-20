@@ -1,17 +1,49 @@
 "use client";
 
 import { useState } from "react";
-import { FiFileText, FiDollarSign, FiCreditCard, FiCheckCircle, FiXCircle, FiDownload, FiSearch, FiEye, FiFilter } from "react-icons/fi";
-// IMPORT UTILITY EKSPOR LAPORAN YANG BARU KITA BUAT
+import { FiFileText, FiDollarSign, FiCreditCard, FiCheckCircle, FiXCircle, FiDownload, FiSearch, FiEye, FiFilter, FiPaperclip, FiImage } from "react-icons/fi";
+
 import { exportInvoicesToCSV } from "../../utils/exportHelper";
 
 export default function InvoicesManagement() {
-  // Mock State Database Finansial (Simulasi data collection/invoices terisolasi dari serviceTickets)
+  // Mock State Database Finansial (SUNTIKAN DATA BARU: externalProcurements untuk pelacakan nota luar)
   const [invoices, setInvoices] = useState([
-    { id: "INV-20260520-001", customerName: "Galuh Ihsan", plateNumber: "AD 2345 GL", date: "20 Mei 2026", amount: 685000, method: "QRIS (Midtrans)", isPaid: true },
-    { id: "INV-20260520-002", customerName: "Bambang Pamungkas", plateNumber: "B 1234 ABC", date: "20 Mei 2026", amount: 950000, method: "Cash", isPaid: false },
-    { id: "INV-20260519-045", customerName: "Dewi Lestari", plateNumber: "K 8888 AA", date: "19 Mei 2026", amount: 3800000, method: "Transfer Bank", isPaid: true },
-    { id: "INV-20260518-012", customerName: "Ahmad Subarjo", plateNumber: "AD 4412 KL", date: "18 Mei 2026", amount: 120000, method: "Cash", isPaid: true },
+    { 
+      id: "INV-20260520-001", 
+      customerName: "Galuh Ihsan", 
+      plateNumber: "AD 2345 GL", 
+      date: "20 Mei 2026", 
+      amount: 685000, 
+      method: "QRIS (Midtrans)", 
+      isPaid: true,
+      // Array data lampiran nota luar hasil input dari aplikasi Flutter mekanik
+      externalProcurements: [
+        { partName: "Ring Piston Avanza 2015", supplierStore: "Toko Sumber Rejeki Motor", cost: 350000, receiptPhotoUrl: "https://placehold.co/400x300?text=Nota+Ring+Piston" }
+      ]
+    },
+    { 
+      id: "INV-20260520-002", 
+      customerName: "Bambang Pamungkas", 
+      plateNumber: "B 1234 ABC", 
+      date: "20 Mei 2026", 
+      amount: 950000, 
+      method: "Cash", 
+      isPaid: false,
+      externalProcurements: [] // Kosong jika mekanik murni memakai stok sparepart internal gudang
+    },
+    { 
+      id: "INV-20260519-045", 
+      customerName: "Dewi Lestari", 
+      plateNumber: "K 8888 AA", 
+      date: "19 Mei 2026", 
+      amount: 3800000, 
+      method: "Transfer Bank", 
+      isPaid: true,
+      externalProcurements: [
+        { partName: "Evaporator AC Denso Original", supplierStore: "Sentosa AC Mobil", cost: 1200000, receiptPhotoUrl: "https://placehold.co/400x300?text=Nota+Evaporator+Denso" }
+      ]
+    },
+    { id: "INV-20260518-012", customerName: "Ahmad Subarjo", plateNumber: "AD 4412 KL", date: "18 Mei 2026", amount: 120000, method: "Cash", isPaid: true, externalProcurements: [] },
   ]);
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -59,9 +91,8 @@ export default function InvoicesManagement() {
           <p className="text-sm text-slate-400 mt-1">Sistem kontrol pembukuan transaksi, verifikasi payment gateway, serta ekspor berkas audit kepatuhan akuntansi.</p>
         </div>
         
-        {/* ACTION CALL KELUAR KE HELPER MANDIRI */}
         <button
-          onClick={() => exportInvoicesToCSV(filteredInvoices)} // Mengirim data terfilter biar unduhannya presisi sesuai layar
+          onClick={() => exportInvoicesToCSV(filteredInvoices)} 
           className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-5 py-3 rounded-xl flex items-center justify-center gap-2 transition duration-200 cursor-pointer shadow-lg shadow-emerald-600/10 text-sm"
         >
           <FiDownload size={18} /> Ekspor Laporan Keuangan
@@ -201,15 +232,18 @@ export default function InvoicesManagement() {
       {/* MODAL OVERLAY: RINCIAN DETAIL INVOICE */}
       {selectedInvoice && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-md p-6 relative shadow-2xl">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-xl p-6 relative shadow-2xl max-h-[90vh] overflow-y-auto">
             <button onClick={() => setSelectedInvoice(null)} className="absolute right-5 top-5 p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer">
               <FiXCircle size={20} />
             </button>
+            
             <div className="mb-6 border-b border-slate-800 pb-4">
               <span className="text-[10px] font-bold tracking-widest uppercase text-blue-500">Berkas Faktur Finansial</span>
               <h3 className="text-base font-mono font-bold text-white mt-0.5">{selectedInvoice.id}</h3>
             </div>
-            <div className="space-y-4 text-xs">
+
+            {/* Grid Informasi Ringkas */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs mb-6">
               <div className="flex justify-between bg-slate-950 p-3 rounded-xl border border-slate-800/60">
                 <span className="text-slate-500">Nama Pemilik</span>
                 <span className="font-semibold text-white">{selectedInvoice.customerName}</span>
@@ -226,19 +260,77 @@ export default function InvoicesManagement() {
                 <span className="text-slate-500">Metode Pembayaran</span>
                 <span className="text-slate-300">{selectedInvoice.method}</span>
               </div>
-              <div className="flex justify-between bg-slate-950 p-4 rounded-xl border border-slate-800/60 items-center">
-                <span className="text-slate-500 font-medium text-sm">Total Tagihan</span>
-                <span className="text-base font-bold font-mono text-emerald-400">{formatRupiah(selectedInvoice.amount)}</span>
-              </div>
-              <div className="pt-4 border-t border-slate-800/80 flex items-center justify-between">
-                <div>
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Status Faktur Saat Ini</p>
-                  <p className={`font-bold mt-0.5 ${selectedInvoice.isPaid ? "text-emerald-400" : "text-amber-500"}`}>{selectedInvoice.isPaid ? "LUNAS (TERVERIFIKASI)" : "MENUNGGU SETTLEMENT"}</p>
+            </div>
+
+            {/* =================================================================================== */}
+            {/* SUB-COMPONEN BARU: REKONSILIASI NOTA PENGADAAN SPAREPART LUAR                      */}
+            {/* =================================================================================== */}
+            <div className="space-y-3 mb-6 text-left">
+              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                <FiPaperclip className="text-blue-500" /> Lampiran Pengadaan Suku Cadang Luar (Reimbursement)
+              </h4>
+              
+              {!selectedInvoice.externalProcurements || selectedInvoice.externalProcurements.length === 0 ? (
+                <div className="bg-slate-950/40 border border-slate-800/60 rounded-xl p-4 text-center">
+                  <p className="text-xs text-slate-600">Seluruh sparepart menggunakan stok internal gudang resmi bengkel.</p>
                 </div>
-                {!selectedInvoice.isPaid && (
-                  <button onClick={() => handleVerifyPayment(selectedInvoice.id)} className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 px-4 rounded-xl text-xs transition cursor-pointer shadow-lg shadow-emerald-600/10">Otorisasi Lunas</button>
-                )}
+              ) : (
+                <div className="bg-slate-950 border border-slate-800/60 rounded-xl overflow-hidden">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-800 bg-slate-900/30 text-slate-500 font-semibold uppercase">
+                        <th className="px-4 py-2.5">Onderdil Luar</th>
+                        <th className="px-4 py-2.5">Toko / Supplier</th>
+                        <th className="px-4 py-2.5">Harga Beli</th>
+                        <th className="px-4 py-2.5 text-center">Bukti</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-900 text-slate-400">
+                      {selectedInvoice.externalProcurements.map((proc, idx) => (
+                        <tr key={idx} className="hover:bg-slate-900/20">
+                          <td className="px-4 py-3 font-medium text-slate-200">{proc.partName}</td>
+                          <td className="px-4 py-3 text-slate-400">{proc.supplierStore}</td>
+                          <td className="px-4 py-3 font-mono text-white">{formatRupiah(proc.cost)}</td>
+                          <td className="px-4 py-3 text-center">
+                            <a 
+                              href={proc.receiptPhotoUrl} 
+                              target="_blank" 
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 px-2 py-1 bg-slate-900 hover:bg-slate-800 text-blue-400 hover:text-blue-300 border border-slate-800 rounded transition font-medium"
+                            >
+                              <FiImage size={12} /> Nota
+                            </a>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Total Billing Frame */}
+            <div className="flex justify-between bg-slate-950 p-4 rounded-xl border border-slate-800/60 items-center mb-6 text-xs">
+              <span className="text-slate-500 font-medium text-sm">Total Akumulasi Tagihan Pelanggan</span>
+              <span className="text-base font-bold font-mono text-emerald-400">{formatRupiah(selectedInvoice.amount)}</span>
+            </div>
+
+            {/* Status & Quick Action Panel */}
+            <div className="pt-4 border-t border-slate-800/80 flex items-center justify-between text-xs">
+              <div>
+                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Status Faktur Saat Ini</p>
+                <p className={`font-bold mt-0.5 ${selectedInvoice.isPaid ? "text-emerald-400" : "text-amber-500"}`}>
+                  {selectedInvoice.isPaid ? "LUNAS (TERVERIFIKASI)" : "MENUNGGU SETTLEMENT"}
+                </p>
               </div>
+              {!selectedInvoice.isPaid && (
+                <button 
+                  onClick={() => handleVerifyPayment(selectedInvoice.id)} 
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 px-4 rounded-xl text-xs transition cursor-pointer shadow-lg shadow-emerald-600/10"
+                >
+                  Otorisasi Lunas
+                </button>
+              )}
             </div>
           </div>
         </div>
