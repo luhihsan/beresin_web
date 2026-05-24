@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { FiPlus, FiUserPlus, FiX, FiCheckCircle, FiMinusCircle, FiKey, FiBarChart2, FiStar, FiAward, FiBriefcase } from "react-icons/fi";
 // IMPORT KONEKSI DATABASE FIRESTORE ASLI LU
 import { db } from "../../lib/client";
-import { collection, getDocs, addDoc, updateDoc, doc, query, where, orderBy } from "firebase/firestore";
+import { collection, getDocs, setDoc, updateDoc, doc, query, where, orderBy } from "firebase/firestore";
 
 export default function MechanicsManagement() {
   // State Utama untuk menampung data live mekanik dari Cloud Firestore
@@ -69,7 +69,8 @@ export default function MechanicsManagement() {
 
   /**
    * @description Menangani proses pembuatan akun mekanik baru (Credential Generation).
-   * Menulis data profil langsung ke Firestore untuk menghindari bentrok session logout di sisi client.
+   * Menggunakan REST API Firebase Auth untuk menghindari bentrok session admin,
+   * lalu menulis data profil ke Firestore dengan ID dokumen yang sinkron dengan UID Auth.
    * @param {Event} e - Objek event form submission
    */
   const handleGenerateAccount = async (e) => {
@@ -82,11 +83,41 @@ export default function MechanicsManagement() {
         throw new Error("Format otentikasi tidak memenuhi parameter keamanan mendasar.");
       }
 
-      console.log("Firestore Mutator: Menulis data profil mekanik baru ke koleksi 'users'...");
-      const usersCollectionRef = collection(db, "users");
+      console.log("Firebase Auth: Membuat kredensial via REST API...");
+      
+      // Ambil API KEY dari environment variable bawaan Next.js lu
+      const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY; 
+      
+      // 1. BUAT AKUN DI FIREBASE AUTH VIA REST API (Admin tidak akan ter-logout)
+      const authResponse = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: formData.email,
+            password: formData.pin, // Di form lu, password disimpan di state 'pin'
+            returnSecureToken: false,
+          }),
+        }
+      );
 
-      // Commit write operation langsung ke Cloud Firestore
-      await addDoc(usersCollectionRef, {
+      const authData = await authResponse.json();
+
+      // Jika server Auth menolak (misal: email sudah terdaftar)
+      if (!authResponse.ok) {
+        throw new Error(authData.error.message || "Gagal membuat kredensial Auth mekanik");
+      }
+
+      // Ini UID resmi yang dihasilkan oleh Firebase Authentication Server
+      const generatedUid = authData.localId; 
+
+      console.log("Firestore Mutator: Menulis data profil mekanik baru ke koleksi 'users'...");
+
+      // 2. COMMIT WRITE OPERATION KE CLOUD FIRESTORE MENGGUNAKAN setDoc
+      // Kita paku ID dokumen Firestore agar sama persis dengan UID Auth
+      await setDoc(doc(db, "users", generatedUid), {
+        uid: generatedUid, // Kita simpan juga UID-nya di dalam properti dokumen
         name: formData.name,
         email: formData.email,
         phone: formData.phone,
@@ -99,8 +130,8 @@ export default function MechanicsManagement() {
 
       setIsModalOpen(false);
       setFormData({ name: "", phone: "", email: "", pin: "" }); // Reset state form data
-      console.log("Akun B2B Mekanik sukses di-commit ke Cloud Firestore.");
-      alert("Profil mekanik berhasil disimpan ke database cloud!");
+      console.log("Akun B2B Mekanik sukses di-commit ke Auth & Cloud Firestore.");
+      alert("Kredensial berhasil dibuat dan profil mekanik tersimpan di database cloud!");
     } catch (err) {
       console.error("Critical System Alert - Pembuatan akun mekanik gagal:", err.message);
       alert(`Gagal menyimpan data: ${err.message}`);
