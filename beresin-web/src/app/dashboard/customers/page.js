@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { FiUsers, FiPlus, FiX, FiPhone, FiSmartphone, FiUserCheck, FiChevronRight, FiClock, FiFileText, FiUser, FiImage } from "react-icons/fi";
-// IMPORT KONEKSI CORE FIRESTORE ASLI LU
+import { FiX, FiPhone, FiSmartphone, FiChevronRight, FiClock, FiFileText, FiUser, FiImage } from "react-icons/fi";
+import { BsQrCode } from "react-icons/bs";
 import { db } from "../../lib/client";
-import { collection, getDocs, addDoc, query, where } from "firebase/firestore";
+import { collection, getDocs, query, where } from "firebase/firestore";
+import AddTicketModal from "./AddTicketModal";
 
 export default function CustomersManagement() {
   const [customers, setCustomers] = useState([]);
@@ -14,13 +15,12 @@ export default function CustomersManagement() {
   const [isLoadingCustomers, setIsLoadingCustomers] = useState(true);
   const [isLoadingVehicles, setIsLoadingVehicles] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [selectedVehicle, setSelectedVehicle] = useState(null);
 
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [formData, setFormData] = useState({ name: "", phone: "" });
+  // STATE KONTROL UNTUK MODAL MODULAR TERPISAH
+  const [isTicketModalOpen, setIsTicketModalOpen] = useState(false);
 
   useEffect(() => {
     fetchCustomersFromFirestore();
@@ -34,9 +34,7 @@ export default function CustomersManagement() {
     return String(rawDate);
   };
 
-  // ===================================================================================
-  // CORE UPGRADE: LIVE AGGREGATION ENGINE (Menghitung Jumlah Mobil Secara Riil & Akurat)
-  // ===================================================================================
+  // ENGINE LIVE AGGREGATION: Menghitung Jumlah Mobil Lintas Koleksi (cars & vehicles) Secara Akurat
   const fetchCustomersFromFirestore = async () => {
     try {
       setIsLoadingCustomers(true);
@@ -49,7 +47,6 @@ export default function CustomersManagement() {
       
       const qUsersCustomer = query(usersRef, where("role", "==", "customer"));
 
-      // Tarik semua data secara paralel (Pelanggan + Semua Mobil untuk dihitung secara live)
       const [snapLegacy, snapAndroidApp, snapVehicles, snapCars] = await Promise.all([
         getDocs(customersRef),
         getDocs(qUsersCustomer),
@@ -59,7 +56,6 @@ export default function CustomersManagement() {
 
       const mergedMap = new Map();
 
-      // 1. Ekstrak data walk-in manual dari kasir web admin lama
       snapLegacy.docs.forEach(docSnapshot => {
         const raw = docSnapshot.data();
         const phoneKey = raw.phone ? String(raw.phone).trim() : docSnapshot.id;
@@ -70,11 +66,10 @@ export default function CustomersManagement() {
           ...raw,
           type: "Guest",
           joinedDate: formatFirestoreDate(raw.joinedDate || raw.createdAt),
-          totalVehicles: 0 // Reset nilai statis lama, kita timpa pake hitungan live nanti
+          totalVehicles: 0
         });
       });
 
-      // 2. Gabungkan dengan data registrasi pengguna Android App (koleksi users)
       snapAndroidApp.docs.forEach(docSnapshot => {
         const raw = docSnapshot.data();
         const phoneKey = raw.phone ? String(raw.phone).trim() : docSnapshot.id;
@@ -86,7 +81,7 @@ export default function CustomersManagement() {
             ...raw,
             docId: docSnapshot.id, 
             customerUid: docSnapshot.id, 
-            legacyCustomerId: existing.legacyCustomerId, // Amankan ID lama agar mobil kasir gak hilang
+            legacyCustomerId: existing.legacyCustomerId,
             type: "Registered"
           });
         } else {
@@ -104,7 +99,6 @@ export default function CustomersManagement() {
 
       const customerList = Array.from(mergedMap.values());
 
-      // 3. PEMETAAN DIKARYAKAN: Buat index pencarian cepat dari seluruh ID ke rumpun nomor telepon (phoneKey)
       const idToPhoneKeyMap = new Map();
       customerList.forEach(cust => {
         const phoneKey = cust.phone ? String(cust.phone).trim() : cust.docId;
@@ -113,61 +107,51 @@ export default function CustomersManagement() {
         if (cust.legacyCustomerId) idToPhoneKeyMap.set(String(cust.legacyCustomerId).trim(), phoneKey);
       });
 
-      // 4. STRATEGI ANTI-DUPLIKAT: Gunakan instansiasi 'Set' untuk menampung ID unik dokumen mobil per orang
-      const realVehicleTracker = new Map(); // key: phoneKey, value: Set of unique vehicle docIds
+      const realVehicleTracker = new Map();
 
       const trackVehicleToOwner = (vehicleDocId, ownerId) => {
         if (!ownerId) return false;
         const phoneKey = idToPhoneKeyMap.get(String(ownerId).trim());
         if (phoneKey) {
-          if (!realVehicleTracker.has(phoneKey)) {
-            realVehicleTracker.set(phoneKey, new Set());
-          }
+          if (!realVehicleTracker.has(phoneKey)) realVehicleTracker.set(phoneKey, new Set());
           realVehicleTracker.get(phoneKey).add(vehicleDocId);
           return true;
         }
         return false;
       };
 
-      // Pindai semua dokumen di koleksi 'vehicles' (Web)
       snapVehicles.docs.forEach(d => {
         const data = d.data();
-        const matched = trackVehicleToOwner(d.id, data.customerId);
-        if (!matched) trackVehicleToOwner(d.id, data.customerUid);
+        if (!trackVehicleToOwner(d.id, data.customerId)) trackVehicleToOwner(d.id, data.customerUid);
       });
 
-      // Pindai semua dokumen di koleksi 'cars' (Android App)
       snapCars.docs.forEach(d => {
         const data = d.data();
-        const matched = trackVehicleToOwner(d.id, data.customerUid);
-        if (!matched) trackVehicleToOwner(d.id, data.customerId);
+        if (!trackVehicleToOwner(d.id, data.customerUid)) trackVehicleToOwner(d.id, data.customerId);
       });
 
-      // 5. INJEKSI AKHIR: Hitung ukuran asli Set (.size) untuk mendapatkan jumlah mobil riil lapangan
       const finalizedCalculatedCustomers = customerList.map(cust => {
         const phoneKey = cust.phone ? String(cust.phone).trim() : cust.docId;
         const vehicleSet = realVehicleTracker.get(phoneKey);
         return {
           ...cust,
-          totalVehicles: vehicleSet ? vehicleSet.size : 0 // Angka mutlak riil tanpa tebak-tebakan
+          totalVehicles: vehicleSet ? vehicleSet.size : 0
         };
       });
 
       setCustomers(finalizedCalculatedCustomers);
-      console.log("Firestore CRM Engine: Live calculation for totalVehicles parameter resolved successfully.");
     } catch (err) {
-      console.error("Critical CRM Error - Gagal menyatukan hitungan mobil:", err.message);
+      console.error("Critical CRM Error:", err.message);
     } finally {
       setIsLoadingCustomers(false);
     }
   };
 
-  // AMBIL MOBIL DARI DUA KOLEKSI ('vehicles' & 'cars') MENGGUNAKAN SELURUH KELOMPOK ID
+  // AMBIL MOBIL DARI DUA KOLEKSI MENGGUNAKAN SELURUH KELOMPOK ID
   const mt_fetchVehiclesForCustomer = async (customer) => {
     try {
       setIsLoadingVehicles(true);
       setVehicles([]);
-      
       if (!customer) return;
 
       const searchIds = new Set();
@@ -178,8 +162,6 @@ export default function CustomersManagement() {
 
       const idList = Array.from(searchIds).filter(Boolean);
       if (idList.length === 0) return;
-
-      console.log("Firestore CRM: Menarik unit mobil relasional berdasarkan kombinasi ID:", idList);
       
       const vehiclesRef = collection(db, "vehicles");
       const carsRef = collection(db, "cars");
@@ -209,7 +191,7 @@ export default function CustomersManagement() {
 
       setVehicles(Array.from(vehicleDeduplicatedMap.values()));
     } catch (err) {
-      console.error("Gagal menarik data mobil relasional lintas platform:", err.message);
+      console.error("Gagal menarik data mobil relasional:", err.message);
     } finally {
       setIsLoadingVehicles(false);
     }
@@ -239,43 +221,39 @@ export default function CustomersManagement() {
       fetchedHistoryList.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       setServiceHistory(fetchedHistoryList);
     } catch (err) {
-      console.error("Gagal menarik riwayat tiket gabungan:", err.message);
+      console.error("Gagal menarik riwayat tiket:", err.message);
     } finally {
       setIsLoadingHistory(false);
     }
   };
 
-  const handleCreateGuestCustomer = async (e) => {
-    e.preventDefault();
-    setIsSubmitting(true);
-    try {
-      if (formData.phone.length < 10) throw new Error("Nomor WhatsApp tidak standar.");
-      const customersCollectionRef = collection(db, "customers");
-      const todayFormatted = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
-
-      await addDoc(customersCollectionRef, { name: formData.name, phone: formData.phone, type: "Guest", joinedDate: todayFormatted, totalVehicles: 0 });
-      await fetchCustomersFromFirestore();
-      setIsModalOpen(false);
-      setFormData({ name: "", phone: "" });
-      alert("Profil walk-in sukses terdaftar!");
-    } catch (err) {
-      alert(`Pendaftaran gagal: ${err.message}`);
-    } finally {
-      setIsSubmitting(false);
-    }
+  const formatRupiah = (value) => {
+    if (value === 0) return "Free (Paket Garansi)";
+    return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(value);
   };
 
   return (
     <div className="space-y-6 animate-fade-in text-left">
+      
+      {/* Page Header Area */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-white tracking-tight">Pusat Informasi Pelanggan (CRM)</h2>
           <p className="text-sm text-slate-400 mt-1">Manajemen basis data pemilik kendaraan, segmentasi akun aplikasi, serta pelacakan aset mobil.</p>
         </div>
-        <button onClick={() => setIsModalOpen(true)} className="bg-blue-600 hover:bg-blue-500 text-white font-semibold px-5 py-3 rounded-xl flex items-center justify-center gap-2 transition duration-200 cursor-pointer text-sm shadow-lg shadow-blue-600/10"><FiPlus size={18} /> Catat Pelanggan Walk-In</button>
+        
+        {/* REPLACED: Menggunakan BsQrCode yang valid */}
+        <button 
+          onClick={() => setIsTicketModalOpen(true)} 
+          className="bg-blue-600 hover:bg-blue-500 text-white font-semibold px-5 py-3 rounded-xl flex items-center justify-center gap-2 transition duration-200 cursor-pointer text-sm shadow-lg shadow-blue-600/10"
+        >
+          <BsQrCode size={18} /> Tambah Tiket / Scan QR
+        </button>
       </div>
 
+      {/* Main Grid Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+        {/* Tabel Besar Database Pelanggan */}
         <div className={`bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl transition-all duration-300 ${selectedCustomer ? "lg:col-span-2" : "lg:col-span-3"}`}>
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
@@ -297,14 +275,14 @@ export default function CustomersManagement() {
                 ) : (
                   customers.map((cust) => (
                     <tr 
-                      key={cust.docId} 
+                      key={cust.phone || cust.docId} 
                       onClick={() => {
                         setSelectedCustomer(cust);
                         setSelectedVehicle(null);
                         setServiceHistory([]);
                         mt_fetchVehiclesForCustomer(cust);
                       }}
-                      className={`hover:bg-slate-800/30 transition duration-150 cursor-pointer ${selectedCustomer?.docId === cust.docId ? "bg-blue-600/10" : ""}`}
+                      className={`hover:bg-slate-800/30 transition duration-150 cursor-pointer ${selectedCustomer?.phone === cust.phone ? "bg-blue-600/10" : ""}`}
                     >
                       <td className="px-6 py-4 font-medium text-white">{cust.name}</td>
                       <td className="px-6 py-4 font-mono text-slate-400">{cust.phone || "Registrasi Google Auth"}</td>
@@ -316,10 +294,7 @@ export default function CustomersManagement() {
                         )}
                       </td>
                       <td className="px-6 py-4 text-slate-400">{cust.joinedDate}</td>
-                      
-                      {/* AMANKAN OUTPUT: Tampilkan angka kalkulasi riil hasil scan Set, buang fallback tebakan kemarin */}
                       <td className="px-6 py-4 text-center font-bold font-mono text-white">{cust.totalVehicles}</td>
-                      
                       <td className="px-4 py-4 text-slate-500 text-right"><FiChevronRight size={16} /></td>
                     </tr>
                   ))
@@ -329,6 +304,7 @@ export default function CustomersManagement() {
           </div>
         </div>
 
+        {/* Panel Rincian Aset Mobil Pelanggan Terpilih */}
         {selectedCustomer && (
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-6 animate-fade-in lg:col-span-1 relative">
             <button onClick={() => { setSelectedCustomer(null); setSelectedVehicle(null); setVehicles([]); setServiceHistory([]); }} className="absolute right-5 top-5 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"><FiX size={16} /></button>
@@ -372,7 +348,7 @@ export default function CustomersManagement() {
         )}
       </div>
 
-      {/* TIMELINE RIWAYAT SERVIS */}
+      {/* Timeline Riwayat Servis */}
       {selectedVehicle && (
         <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-6 animate-fade-in text-left">
           <div className="border-b border-slate-800 pb-4 flex items-center justify-between">
@@ -385,7 +361,7 @@ export default function CustomersManagement() {
           {isLoadingHistory ? (
             <p className="text-xs text-slate-500 text-center py-6 animate-pulse">Mengunduh berkas rekam medik mesin mobil...</p>
           ) : serviceHistory.length === 0 ? (
-            <div className="bg-slate-950 border border-slate-800 rounded-2xl p-8 text-center text-sm text-slate-500">Belum ada riwayat pengerjaan service ticket untuk unit kendaraan ini.</div>
+            <div className="bg-slate-950 border border-slate-800 rounded-2xl p-8 text-center text-sm text-slate-500">Belum ada riwayat service ticket untuk unit kendaraan ini.</div>
           ) : (
             <div className="space-y-6 relative before:absolute before:inset-y-1 before:left-4 sm:before:left-6 before:w-0.5 before:bg-slate-800">
               {serviceHistory.map((history) => (
@@ -412,7 +388,7 @@ export default function CustomersManagement() {
                       </div>
                       <div className="bg-slate-900/50 p-3 rounded-xl border border-slate-800/40 space-y-1 flex flex-col justify-center md:col-span-2">
                         <p className="text-slate-500 font-medium uppercase tracking-wider text-[10px]">Total Tagihan</p>
-                        <p className="text-emerald-400 font-bold font-mono text-base mt-0.5">{history.invoiceAmount || 0}</p>
+                        <p className="text-emerald-400 font-bold font-mono text-base mt-0.5">{formatRupiah(history.invoiceAmount || 0)}</p>
                       </div>
                     </div>
 
@@ -440,6 +416,13 @@ export default function CustomersManagement() {
           )}
         </div>
       )}
+
+      {/* RE-RENDER COMPONENT MODAL DARI UTAS COMPONENT TERPISAH */}
+      <AddTicketModal
+        isOpen={isTicketModalOpen}
+        onClose={() => setIsTicketModalOpen(false)}
+        onRefresh={fetchCustomersFromFirestore}
+      />
 
     </div>
   );
