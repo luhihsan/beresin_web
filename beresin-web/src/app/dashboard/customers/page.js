@@ -3,8 +3,10 @@
 import { useState, useEffect } from "react";
 import { FiX, FiPhone, FiSmartphone, FiChevronRight, FiClock, FiFileText, FiUser, FiImage } from "react-icons/fi";
 import { BsQrCode } from "react-icons/bs";
+// IMPORT KONEKSI CORE FIRESTORE ASLI
 import { db } from "../../lib/client";
 import { collection, getDocs, query, where } from "firebase/firestore";
+// IMPORT COMPONENT MODAL TERPISAH
 import AddTicketModal from "./AddTicketModal";
 
 export default function CustomersManagement() {
@@ -34,11 +36,11 @@ export default function CustomersManagement() {
     return String(rawDate);
   };
 
-  // ENGINE LIVE AGGREGATION: Menghitung Jumlah Mobil Lintas Koleksi (cars & vehicles) Secara Akurat
+  // ENGINE LIVE AGGREGATION: Menghitung Jumlah Mobil Lintas Koleksi Secara Akurat
   const fetchCustomersFromFirestore = async () => {
     try {
       setIsLoadingCustomers(true);
-      console.log("Firestore CRM: Melakukan tarikan besar paralel lintas 4 koleksi utama...");
+      console.log("Firestore CRM: Menarik data linier dari koleksi pelanggan...");
       
       const customersRef = collection(db, "customers");
       const usersRef = collection(db, "users");
@@ -242,7 +244,6 @@ export default function CustomersManagement() {
           <p className="text-sm text-slate-400 mt-1">Manajemen basis data pemilik kendaraan, segmentasi akun aplikasi, serta pelacakan aset mobil.</p>
         </div>
         
-        {/* REPLACED: Menggunakan BsQrCode yang valid */}
         <button 
           onClick={() => setIsTicketModalOpen(true)} 
           className="bg-blue-600 hover:bg-blue-500 text-white font-semibold px-5 py-3 rounded-xl flex items-center justify-center gap-2 transition duration-200 cursor-pointer text-sm shadow-lg shadow-blue-600/10"
@@ -417,11 +418,15 @@ export default function CustomersManagement() {
         </div>
       )}
 
-      {/* RE-RENDER COMPONENT MODAL DARI UTAS COMPONENT TERPISAH */}
+      {/* MODAL TRANSMITTER AKUN */}
       <AddTicketModal
         isOpen={isTicketModalOpen}
-        onClose={() => setIsTicketModalOpen(false)}
+        onClose={() => {
+          setIsTicketModalOpen(false);
+          fetchCustomersFromFirestore();
+        }}
         onRefresh={fetchCustomersFromFirestore}
+        customers={customers}
       />
 
     </div>
