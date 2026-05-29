@@ -5,7 +5,7 @@ import { FiX } from "react-icons/fi";
 import GuestTicketForm from "./components/GuestTicketForm";
 import QrScanTicketForm from "./components/QrScanTicketForm";
 
-export default function AddTicketModal({ isOpen, onClose, onRefresh }) {
+export default function AddTicketModal({ isOpen, onClose, onRefresh, customers }) {
   const [ticketFlowType, setTicketFlowType] = useState(null); // 'guest' atau 'qr_scan'
 
   if (!isOpen) return null;
@@ -47,9 +47,9 @@ export default function AddTicketModal({ isOpen, onClose, onRefresh }) {
           </div>
         )}
 
-        {/* HUB SINKRONISASI SUB-FORMULIR MODULAR */}
+        {/* HUB SINKRONISASI SUB-FORMULIR MODULAR DENGAN PENERUSAN DATA CRM */}
         {ticketFlowType === "guest" && (
-          <GuestTicketForm onCancel={() => setTicketFlowType(null)} onRefresh={onRefresh} />
+          <GuestTicketForm onCancel={() => setTicketFlowType(null)} onRefresh={onRefresh} customers={customers} />
         )}
         {ticketFlowType === "qr_scan" && (
           <QrScanTicketForm onCancel={() => setTicketFlowType(null)} onRefresh={onRefresh} />

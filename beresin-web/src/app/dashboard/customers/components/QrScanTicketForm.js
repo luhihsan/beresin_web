@@ -6,21 +6,23 @@ import { db } from "../../../lib/client";
 import { collection, addDoc, doc, getDoc } from "firebase/firestore";
 
 export default function QrScanTicketForm({ onCancel, onRefresh }) {
+  // CRITICAL FIX: Penataan urutan inisialisasi State paling atas agar terhindar dari ReferenceError
+  const [facingMode, setFacingMode] = useState("environment");
+  const [cameraError, setCameraError] = useState(null);
   const [scanStep, setScanStep] = useState("scan_mode"); 
   const [scannedCarId, setScannedCarId] = useState("");
   const [isFetching, setIsFetching] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [carDetails, setCarDetails] = useState(null);
+  const [ticketData, setTicketData] = useState({ kmCheckIn: "", tasks: "", photoUrl: "" });
   
-  // SOLUSI LENGKAP MEMORY LEAK: streamRef mengunci status hardware kamera di background
+  // REFERENSI HARDWARE POINTER LINTAS LIFECYCLE
   const streamRef = useRef(null);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const loopRef = useRef(null);
 
-  const [ticketData, setTicketData] = useState({ kmCheckIn: "", tasks: "", photoUrl: "" });
-
-  // RE-ACTIVATION GUARD: Membuka dan menutup kamera sesuai dengan kondisi unmount
+  // KONTROL HIDUP-MATI DRIVER MEDIA KAMERA BROWSER
   useEffect(() => {
     if (scanStep === "scan_mode") {
       startCamera();
@@ -34,13 +36,15 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
   const startCamera = async () => {
     try {
       setCameraError(null);
-      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+      }
 
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: facingMode, width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false
       });
-      streamRef.current = stream; // Simpan ke referensi mutable
+      streamRef.current = stream;
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -49,7 +53,7 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
         loopRef.current = requestAnimationFrame(tick);
       }
     } catch (err) {
-      setCameraError("Sistem gagal mengakses fungsionalitas kamera. Pastikan hak akses diizinkan oleh pengaturan privasi browser Anda.");
+      setCameraError("Sistem gagal mengakses fungsionalitas kamera. Pastikan hak akses diberikan pada pengaturan privasi browser Anda.");
     }
   };
 
@@ -89,10 +93,10 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
       streamRef.current.getTracks().forEach(t => t.stop());
       streamRef.current = null;
     }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
   };
-
-  const [facingMode, setFacingMode] = useState("environment");
-  const [cameraError, setCameraError] = useState(null);
 
   const fetchCarData = async (carId) => {
     try {
