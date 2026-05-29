@@ -7,7 +7,7 @@ import { db } from "../../../lib/client";
 import { collection, addDoc, doc, getDoc } from "firebase/firestore";
 
 export default function QrScanTicketForm({ onCancel, onRefresh }) {
-  // DEKLARASI STATE UTAMA PADA STRUKTUR ATAS (MEMATUHI ATURAN HOISTING NEXT.JS)
+  // INISIALISASI STATE UTAMA (DITEMPATKAN PADA STRUKTUR PALING ATAS UNTUK MENGHINDARI REFERENCE ERROR)
   const [facingMode, setFacingMode] = useState("environment");
   const [cameraError, setCameraError] = useState(null);
   const [scanStep, setScanStep] = useState("scan_mode"); 
@@ -16,7 +16,7 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [carDetails, setCarDetails] = useState(null);
   
-  // STATE BARU: MANAJEMEN MEDIA INTEGRASI FOTO KOMPRES
+  // STATE MANAJEMEN MEDIA INTEGRASI FOTO KOMPRESI
   const [photoPreview, setPhotoPreview] = useState("");
   const [isCaptureCameraActive, setIsCaptureCameraActive] = useState(false);
   const [ticketData, setTicketData] = useState({ kmCheckIn: "", tasks: "" });
@@ -43,7 +43,7 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
     };
   }, [scanStep, facingMode]);
 
-  // ENGINE UTILITY: Melakukan Kompresi Citra Canvas Menjadi File JPEG Maksimal 800x600 Piksel
+  // CANVAS UTILITY ENGINE: Mengompresi Citra Canvas Menjadi Format JPEG Ringan Demi Efisiensi Storage
   const compressImage = (srcBase64) => {
     return new Promise((resolve) => {
       const img = new Image();
@@ -100,7 +100,7 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
     document.body.appendChild(script);
   };
 
-  // CORE SCANNER LOOP (FIXED BUG: Menggunakan HAVE_ENOUGH_DATA Untuk Pemindaian Instan)
+  // CORE SCANNER LOOP: Menggunakan Validasi HAVE_ENOUGH_DATA Untuk Kecepatan Pindai Instan
   const tick = () => {
     if (videoRef.current && videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA && window.jsQR) {
       const canvas = canvasRef.current;
@@ -116,7 +116,7 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
 
         if (code && code.data) {
           setScannedCarId(code.data);
-          stopCamera(); // Hentikan kamera segera setelah data barcode tertangkap
+          stopCamera(); 
           fetchCarData(code.data);
           return;
         }
@@ -134,7 +134,6 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
     if (videoRef.current) videoRef.current.srcObject = null;
   };
 
-  // KAMERA DOKUMENTASI: Mengelola Aliran Kamera Pengambil Gambar Fisik Kerusakan Mobil
   const toggleCaptureCamera = async (activate) => {
     if (activate) {
       try {
@@ -208,34 +207,48 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
     } catch (err) {
       alert(`Validasi Verifikasi Gagal: ${err.message}`);
       setScannedCarId("");
-      startCamera(); // Aktifkan kembali kamera pemindai jika proses kueri gagal
+      startCamera(); 
     } finally {
       setIsFetching(false);
     }
   };
 
+  // SUBMIT HANDLER: MENYUNTIKKAN PARALLEL FIELD AGAR TERKONEKSI KE HALAMAN CUSTOMER & DASHBOARD SEKALIGUS
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!carDetails) return;
     setIsSubmitting(true);
 
     try {
-      await addDoc(collection(db, "serviceTickets"), {
+      const ticketsRef = collection(db, "serviceTickets");
+
+      // Skema Transaksi Terpadu: Mendukung Struktur Web Admin Lama & Mobile App Baru
+      const payload = {
         ticketId: `SRV-${Date.now()}`,
+        
+        // PENGAMAN RELASIONAL (CRITICAL FIX): Disuntikkan ke tingkat akar agar terbaca oleh halaman CRM Customer
+        customerId: carDetails.customerUid, 
+        vehicleId: carDetails.carId,        
+        
+        // Parameter Kontrak Data Mobile App
         customerUid: carDetails.customerUid,
-        mechanicId: "", mechanicName: "", 
+        mechanicId: "", 
+        mechanicName: "", 
         status: "waiting",
         tasks: ticketData.tasks,
         kmCheckIn: Number(ticketData.kmCheckIn) || 0,
-        kmService: 0, invoiceAmount: 0,
+        kmService: 0, 
+        invoiceAmount: 0,
         complaintPhotoUrls: photoPreview ? [photoPreview] : [],
         externalProcurements: [], 
         createdAt: new Date(),
         date: new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" }),
         carDetails: { ...carDetails }
-      });
+      };
 
-      alert("Berkas pendaftaran antrean pelanggan aplikasi berhasil terbit.");
+      await addDoc(ticketsRef, payload);
+
+      alert("Berkas pendaftaran antrean pelanggan aplikasi berhasil terbit dan tersinkronisasi ke sistem CRM.");
       onCancel();
       await onRefresh();
     } catch (err) {
@@ -248,7 +261,6 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
   return (
     <div className="space-y-4">
       {scanStep === "scan_mode" ? (
-        /* ALUR LANGKAH 1: KONDISI PEMINDAIAN LIVE SCANNER */
         <div className="space-y-6 py-2">
           <div className="border-b border-slate-800 pb-3 flex items-center justify-between">
             <div className="text-left">
@@ -284,7 +296,6 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
           </form>
         </div>
       ) : (
-        /* ALUR LANGKAH 2: FORMULIR ISIAN AUTO-POPULATE DENGAN MENGGUNAKAN UPLOAD MEDIA FOTO */
         carDetails && (
           <form onSubmit={handleSubmit} className="space-y-4 text-left animate-fade-in text-xs">
             <div className="border-b border-slate-800 pb-3 flex items-center justify-between">
@@ -294,7 +305,6 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
               </div>
             </div>
 
-            {/* Display Monitor Box Spesifikasi Mobil */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-950 p-4 rounded-2xl border border-slate-800/80 text-xs">
               <div><p className="text-[10px] text-slate-500 font-semibold uppercase">Nomor Pelat</p><p className="font-mono font-bold text-white text-sm mt-0.5">{carDetails.plate}</p></div>
               <div><p className="text-[10px] text-slate-500 font-semibold uppercase">Merek</p><p className="font-semibold text-slate-200 mt-0.5">{carDetails.brand}</p></div>
@@ -312,9 +322,8 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
               <textarea required rows={3} value={ticketData.tasks} onChange={(e) => setTicketData({...ticketData, tasks: e.target.value})} placeholder="Ketik rincian gejala kerusakan mesin..." className="w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white outline-none resize-none leading-relaxed" />
             </div>
 
-            {/* UPGRADE PENYELARASAN MEDIA FOTO KOMPRES (BUANG INPUT STRING URL JADUL) */}
             <div className="space-y-2 text-xs">
-              <label className="font-semibold text-slate-400">Dokumentasi Visual Kondisi Fisik Komponen (Ganti Format URL)</label>
+              <label className="font-semibold text-slate-400">Dokumentasi Visual Kondisi Fisik Komponen</label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-2">
                   <div className="flex gap-2">
