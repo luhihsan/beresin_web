@@ -1,12 +1,13 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { FiRefreshCw, FiCheckCircle } from "react-icons/fi";
+import { FiRefreshCw, FiCheckCircle, FiUpload, FiCamera, FiTrash2 } from "react-icons/fi";
+// IMPORT UTILITY KONEKSI CLOUD FIRESTORE CORE ASLI
 import { db } from "../../../lib/client";
 import { collection, addDoc, doc, getDoc } from "firebase/firestore";
 
 export default function QrScanTicketForm({ onCancel, onRefresh }) {
-  // CRITICAL FIX: Penataan urutan inisialisasi State paling atas agar terhindar dari ReferenceError
+  // DEKLARASI STATE UTAMA PADA STRUKTUR ATAS (MEMATUHI ATURAN HOISTING NEXT.JS)
   const [facingMode, setFacingMode] = useState("environment");
   const [cameraError, setCameraError] = useState(null);
   const [scanStep, setScanStep] = useState("scan_mode"); 
@@ -14,15 +15,21 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
   const [isFetching, setIsFetching] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [carDetails, setCarDetails] = useState(null);
-  const [ticketData, setTicketData] = useState({ kmCheckIn: "", tasks: "", photoUrl: "" });
   
-  // REFERENSI HARDWARE POINTER LINTAS LIFECYCLE
+  // STATE BARU: MANAJEMEN MEDIA INTEGRASI FOTO KOMPRES
+  const [photoPreview, setPhotoPreview] = useState("");
+  const [isCaptureCameraActive, setIsCaptureCameraActive] = useState(false);
+  const [ticketData, setTicketData] = useState({ kmCheckIn: "", tasks: "" });
+  
+  // REFERENSI POINTER MEDIA PERANGKAT KERAS (ANTI-LEAK TRAFFIC)
   const streamRef = useRef(null);
+  const captureStreamRef = useRef(null);
   const videoRef = useRef(null);
+  const captureVideoRef = useRef(null);
   const canvasRef = useRef(null);
   const loopRef = useRef(null);
 
-  // KONTROL HIDUP-MATI DRIVER MEDIA KAMERA BROWSER
+  // KONTROL AKTIVASI DAN TERMINASI DRIVER ALIRAN LENSA KAMERA SCANNER
   useEffect(() => {
     if (scanStep === "scan_mode") {
       startCamera();
@@ -30,15 +37,43 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
     } else {
       stopCamera();
     }
-    return () => stopCamera();
+    return () => {
+      stopCamera();
+      stopCaptureCamera();
+    };
   }, [scanStep, facingMode]);
+
+  // ENGINE UTILITY: Melakukan Kompresi Citra Canvas Menjadi File JPEG Maksimal 800x600 Piksel
+  const compressImage = (srcBase64) => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.src = srcBase64;
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const maxWidth = 800;
+        const maxHeight = 600;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > maxWidth) { height *= maxWidth / width; width = maxWidth; }
+        } else {
+          if (height > maxHeight) { width *= maxHeight / height; height = maxHeight; }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", 0.75));
+      };
+    });
+  };
 
   const startCamera = async () => {
     try {
       setCameraError(null);
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(t => t.stop());
-      }
+      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
 
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: facingMode, width: { ideal: 1280 }, height: { ideal: 720 } },
@@ -65,8 +100,9 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
     document.body.appendChild(script);
   };
 
+  // CORE SCANNER LOOP (FIXED BUG: Menggunakan HAVE_ENOUGH_DATA Untuk Pemindaian Instan)
   const tick = () => {
-    if (videoRef.current && videoRef.current.readyState === videoRef.current.HAVE_CURRENT_DATA && window.jsQR) {
+    if (videoRef.current && videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA && window.jsQR) {
       const canvas = canvasRef.current;
       const video = videoRef.current;
       if (canvas) {
@@ -74,11 +110,13 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        
         const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const code = window.jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: "dontInvert" });
 
         if (code && code.data) {
           setScannedCarId(code.data);
+          stopCamera(); // Hentikan kamera segera setelah data barcode tertangkap
           fetchCarData(code.data);
           return;
         }
@@ -93,8 +131,59 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
       streamRef.current.getTracks().forEach(t => t.stop());
       streamRef.current = null;
     }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+  };
+
+  // KAMERA DOKUMENTASI: Mengelola Aliran Kamera Pengambil Gambar Fisik Kerusakan Mobil
+  const toggleCaptureCamera = async (activate) => {
+    if (activate) {
+      try {
+        setIsCaptureCameraActive(true);
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: { facingMode: "environment" }, 
+          audio: false 
+        });
+        captureStreamRef.current = stream;
+        setTimeout(() => { if (captureVideoRef.current) captureVideoRef.current.srcObject = stream; }, 100);
+      } catch (err) {
+        alert("Gagal mengaktifkan perangkat kamera dokumentasi.");
+        setIsCaptureCameraActive(false);
+      }
+    } else {
+      stopCaptureCamera();
+    }
+  };
+
+  const stopCaptureCamera = () => {
+    if (captureStreamRef.current) {
+      captureStreamRef.current.getTracks().forEach(t => t.stop());
+      captureStreamRef.current = null;
+    }
+    setIsCaptureCameraActive(false);
+  };
+
+  const captureSnapshot = async () => {
+    if (captureVideoRef.current) {
+      const canvas = document.createElement("canvas");
+      canvas.width = captureVideoRef.current.videoWidth;
+      canvas.height = captureVideoRef.current.videoHeight;
+      canvas.getContext("2d").drawImage(captureVideoRef.current, 0, 0, canvas.width, canvas.height);
+      
+      const compressed = await compressImage(canvas.toDataURL("image/jpeg"));
+      setPhotoPreview(compressed);
+      toggleCaptureCamera(false);
+    }
+  };
+
+  const handleFileChange = async (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        const compressed = await compressImage(event.target.result);
+        setPhotoPreview(compressed);
+      };
+      reader.readAsDataURL(file);
     }
   };
 
@@ -106,14 +195,20 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
       
       const data = snap.data();
       setCarDetails({
-        carId: snap.id, brand: data.brand || "Merek Kustom", type: data.type || data.model || "Tipe Unit",
-        plate: data.plate || data.plateNumber || "AD 0000 XX", year: data.year || "-",
-        color: data.color || "-", engineType: data.engineType || "Bensin", customerUid: data.customerUid || data.customerId || ""
+        carId: snap.id, 
+        brand: data.brand || "Merek Kustom", 
+        type: data.type || data.model || "Tipe Unit",
+        plate: data.plate || data.plateNumber || "AD 0000 XX", 
+        year: data.year || "-",
+        color: data.color || "-", 
+        engineType: data.engineType || "Bensin", 
+        customerUid: data.customerUid || data.customerId || ""
       });
       setScanStep("form_fill");
     } catch (err) {
-      alert(`Validasi Gagal: ${err.message}`);
+      alert(`Validasi Verifikasi Gagal: ${err.message}`);
       setScannedCarId("");
+      startCamera(); // Aktifkan kembali kamera pemindai jika proses kueri gagal
     } finally {
       setIsFetching(false);
     }
@@ -128,21 +223,23 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
       await addDoc(collection(db, "serviceTickets"), {
         ticketId: `SRV-${Date.now()}`,
         customerUid: carDetails.customerUid,
-        mechanicId: "", mechanicName: "", status: "waiting",
+        mechanicId: "", mechanicName: "", 
+        status: "waiting",
         tasks: ticketData.tasks,
         kmCheckIn: Number(ticketData.kmCheckIn) || 0,
         kmService: 0, invoiceAmount: 0,
-        complaintPhotoUrls: ticketData.photoUrl.trim() ? [ticketData.photoUrl.trim()] : [],
-        externalProcurements: [], createdAt: new Date(),
+        complaintPhotoUrls: photoPreview ? [photoPreview] : [],
+        externalProcurements: [], 
+        createdAt: new Date(),
         date: new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" }),
         carDetails: { ...carDetails }
       });
 
-      alert("Tiket boarding antrean pelanggan aplikasi berhasil terbit.");
+      alert("Berkas pendaftaran antrean pelanggan aplikasi berhasil terbit.");
       onCancel();
       await onRefresh();
     } catch (err) {
-      alert(`Gagal: ${err.message}`);
+      alert(`Gagal menyimpan data transaksi: ${err.message}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -151,6 +248,7 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
   return (
     <div className="space-y-4">
       {scanStep === "scan_mode" ? (
+        /* ALUR LANGKAH 1: KONDISI PEMINDAIAN LIVE SCANNER */
         <div className="space-y-6 py-2">
           <div className="border-b border-slate-800 pb-3 flex items-center justify-between">
             <div className="text-left">
@@ -174,7 +272,7 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
             )}
           </div>
 
-          <form onSubmit={(e) => { e.preventDefault(); fetchCarData(scannedCarId); }} className="space-y-4 max-w-md mx-auto text-left text-xs">
+          <form onSubmit={(e) => { e.preventDefault(); stopCamera(); fetchCarData(scannedCarId); }} className="space-y-4 max-w-md mx-auto text-left text-xs">
             <div className="space-y-1.5">
               <label className="font-semibold text-purple-400">Input Manual Hash ID Kendaraan (Opsi Cadangan)</label>
               <div className="flex gap-2">
@@ -186,6 +284,7 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
           </form>
         </div>
       ) : (
+        /* ALUR LANGKAH 2: FORMULIR ISIAN AUTO-POPULATE DENGAN MENGGUNAKAN UPLOAD MEDIA FOTO */
         carDetails && (
           <form onSubmit={handleSubmit} className="space-y-4 text-left animate-fade-in text-xs">
             <div className="border-b border-slate-800 pb-3 flex items-center justify-between">
@@ -195,6 +294,7 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
               </div>
             </div>
 
+            {/* Display Monitor Box Spesifikasi Mobil */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-950 p-4 rounded-2xl border border-slate-800/80 text-xs">
               <div><p className="text-[10px] text-slate-500 font-semibold uppercase">Nomor Pelat</p><p className="font-mono font-bold text-white text-sm mt-0.5">{carDetails.plate}</p></div>
               <div><p className="text-[10px] text-slate-500 font-semibold uppercase">Merek</p><p className="font-semibold text-slate-200 mt-0.5">{carDetails.brand}</p></div>
@@ -202,15 +302,9 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
               <div><p className="text-[10px] text-slate-500 font-semibold uppercase">Tahun</p><p className="font-mono text-slate-200 mt-0.5">{carDetails.year}</p></div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="space-y-1.5">
-                <label className="font-semibold text-slate-400">Odometer Masuk (KM)</label>
-                <input type="number" required value={ticketData.kmCheckIn} onChange={(e) => setTicketData({...ticketData, kmCheckIn: e.target.value})} placeholder="Contoh: 12000" className="w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white font-mono outline-none" />
-              </div>
-              <div className="sm:col-span-2 space-y-1.5">
-                <label className="font-semibold text-slate-400">URL Gambar Tambahan (Opsional)</label>
-                <input type="url" value={ticketData.photoUrl} onChange={(e) => setTicketData({...ticketData, photoUrl: e.target.value})} placeholder="https://i.ibb.co/example.png" className="w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white font-mono outline-none" />
-              </div>
+            <div className="space-y-1.5">
+              <label className="font-semibold text-slate-400">Odometer Masuk (KM)</label>
+              <input type="number" required value={ticketData.kmCheckIn} onChange={(e) => setTicketData({...ticketData, kmCheckIn: e.target.value})} placeholder="Contoh: 12000" className="w-full max-w-xs px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white font-mono outline-none" />
             </div>
 
             <div className="space-y-1.5">
@@ -218,8 +312,43 @@ export default function QrScanTicketForm({ onCancel, onRefresh }) {
               <textarea required rows={3} value={ticketData.tasks} onChange={(e) => setTicketData({...ticketData, tasks: e.target.value})} placeholder="Ketik rincian gejala kerusakan mesin..." className="w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white outline-none resize-none leading-relaxed" />
             </div>
 
+            {/* UPGRADE PENYELARASAN MEDIA FOTO KOMPRES (BUANG INPUT STRING URL JADUL) */}
+            <div className="space-y-2 text-xs">
+              <label className="font-semibold text-slate-400">Dokumentasi Visual Kondisi Fisik Komponen (Ganti Format URL)</label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <div className="flex gap-2">
+                    <label className="flex-1 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-xl p-3 flex flex-col items-center justify-center cursor-pointer transition text-center text-slate-400 hover:text-white">
+                      <FiUpload size={16} className="mb-1" /> <span>Unggah dari Dokumen</span>
+                      <input type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
+                    </label>
+                    <button type="button" onClick={() => toggleCaptureCamera(!isCaptureCameraActive)} className={`flex-1 border rounded-xl p-3 flex flex-col items-center justify-center transition text-center cursor-pointer ${isCaptureCameraActive ? 'bg-rose-500/10 text-rose-400 border-rose-500/30' : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800'}`}>
+                      <FiCamera size={16} className="mb-1" /> <span>{isCaptureCameraActive ? "Nonaktifkan Kamera" : "Aktifkan Perangkat Kamera"}</span>
+                    </button>
+                  </div>
+                  {isCaptureCameraActive && (
+                    <div className="relative bg-black rounded-2xl overflow-hidden aspect-video border border-slate-700 shadow-inner">
+                      <video ref={captureVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+                      <button type="button" onClick={captureSnapshot} className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-blue-600 hover:bg-blue-500 text-white font-bold px-4 py-1.5 rounded-full text-[11px] shadow-lg cursor-pointer">Tangkap Foto Kontrol</button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-slate-950 border border-slate-800/80 rounded-2xl p-3 flex items-center justify-center min-h-[100px]">
+                  {photoPreview ? (
+                    <div className="relative w-full max-w-[180px] aspect-video bg-slate-900 rounded-xl overflow-hidden border border-slate-700">
+                      <img src={photoPreview} alt="Pratinjau" className="w-full h-full object-cover" />
+                      <button type="button" onClick={() => setPhotoPreview("")} className="absolute top-2 right-2 p-1 bg-slate-950/80 hover:bg-rose-600 text-slate-400 hover:text-white rounded-lg transition cursor-pointer"><FiTrash2 size={12} /></button>
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-slate-600 italic text-center">Belum ada berkas dokumentasi fisik yang dilampirkan.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+
             <div className="flex gap-3 pt-4">
-              <button type="button" onClick={() => setScanStep("scan_mode")} className="flex-1 py-3 bg-slate-950 border border-slate-800 text-slate-400 font-bold rounded-xl hover:text-white text-center">Ulangi Pemindaian</button>
+              <button type="button" onClick={() => { setPhotoPreview(""); setScanStep("scan_mode"); }} className="flex-1 py-3 bg-slate-950 border border-slate-800 text-slate-400 font-bold rounded-xl hover:text-white text-center">Ulangi Pemindaian</button>
               <button type="submit" disabled={isSubmitting} className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg transition">{isSubmitting ? "Menyimpan..." : "Simpan Berkas Tiket"}</button>
             </div>
           </form>
