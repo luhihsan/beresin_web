@@ -2,19 +2,22 @@
 
 import { useState, useEffect } from "react";
 import { FiActivity, FiClock, FiTrendingUp, FiUser, FiCheck, FiUserPlus, FiX } from "react-icons/fi";
-// IMPORT KONEKSI CORE FIRESTORE ASLI LU
+// IMPORT KONEKSI CORE FIRESTORE ASLI
 import { db } from "../lib/client";
 import { collection, onSnapshot, query, where, orderBy, updateDoc, doc, getDocs } from "firebase/firestore";
+// IMPORT COMPONENTS MODAL PENANGGUNG JAWAB ALUR KERJA
+import QueueActionModal from "./QueueActionModal";
 
 export default function DashboardOverview() {
-  // State Utama untuk Agregasi Metrik Finansial & Operasional Lapangan
   const [metrics, setMetrics] = useState({ todayCars: 0, waitingQueue: 0, monthlyRevenue: 0 });
   const [liveTickets, setLiveTickets] = useState([]);
-  const [mechanics, setMechanics] = useState([]); // Menampung daftar montir aktif
+  const [mechanics, setMechanics] = useState([]); 
   const [isLoading, setIsLoading] = useState(true);
 
-  // STATE UI: Mengontrol modal pop-up penugasan mekanik
-  const [selectedTicketForMechanic, setSelectedTicketForMechanic] = useState(null);
+  // STATE MANAJEMEN SELEKSI DATA TRANSFER KE PANEL MODAL
+  const [approveTicket, setApproveTicket] = useState(null);
+  const [rejectTicket, setRejectTicket] = useState(null);
+  const [assignTicket, setAssignTicket] = useState(null);
 
   useEffect(() => {
     console.log("Firestore Real-time: Membuka jalur onSnapshot stream listener...");
@@ -25,21 +28,6 @@ export default function DashboardOverview() {
     const ticketsQuery = query(ticketsCollectionRef, orderBy("createdAt", "desc"));
     const invoicesQuery = query(invoicesCollectionRef, where("isPaid", "==", true));
 
-    // TAMENG PENGAMAN MEKANIK: Ambil semua role mekanik, lalu filter isActive secara fleksibel di memory
-    const fetchActiveMechanics = async () => {
-      try {
-        const usersRef = collection(db, "users");
-        const qMech = query(usersRef, where("role", "==", "mechanic"));
-        const snap = await getDocs(qMech);
-        const list = snap.docs.map(d => ({ uid: d.id, ...d.data() })).filter(m => m.isActive !== false);
-        setMechanics(list);
-      } catch (err) {
-        console.error("Gagal memuat master data mekanik:", err.message);
-      }
-    };
-    fetchActiveMechanics();
-
-    // SINKRONISASI TIKET OPERASIONAL BENGKEL LINTAS PLATFORM
     const unsubscribeTickets = onSnapshot(ticketsQuery, (snapshot) => {
       try {
         const allTickets = snapshot.docs.map(doc => ({
@@ -54,11 +42,17 @@ export default function DashboardOverview() {
           return ticketDate === todayString;
         }).length;
 
-        const waitingCount = allTickets.filter(ticket => ticket.status === "waiting" || ticket.status === "pending").length;
-        const activeQueueList = allTickets.filter(ticket => ticket.status === "pending" || ticket.status === "waiting" || ticket.status === "processing");
+        const waitingCount = allTickets.filter(ticket => ticket.status === "waiting" || ticket.status === "pending" || ticket.status === "waiting_offer").length;
+        
+        // Memasukkan alur status transisi 'waiting_offer' ke monitor sistem kasir utama agar real-time terpantau
+        const activeQueueList = allTickets.filter(ticket => 
+          ticket.status === "pending" || ticket.status === "waiting" || ticket.status === "waiting_offer" || ticket.status === "processing" || ticket.status === "rejected"
+        );
 
         setLiveTickets(activeQueueList);
         setMetrics(prev => ({ ...prev, todayCars: todayCarsCount, waitingQueue: waitingCount }));
+        
+        fetchActiveMechanicsAndWorkload(allTickets);
       } catch (err) {
         console.error("Stream parsing error (Tickets):", err.message);
       } finally {
@@ -94,45 +88,98 @@ export default function DashboardOverview() {
     };
   }, []);
 
-  // FITUR AKSIONER A: ACC TIKET ANTRIAN MASUK DARI PENDING KE WAITING
-  const handleVerifyAndApproveQueue = async (ticketDocId) => {
+  const fetchActiveMechanicsAndWorkload = async (currentTickets) => {
     try {
-      console.log(`Firestore Mutation: Mengubah status tiket [${ticketDocId}] menjadi waiting...`);
-      const targetDocRef = doc(db, "serviceTickets", ticketDocId);
-      await updateDoc(targetDocRef, { status: "waiting" });
-      alert("Tiket booking berhasil di-ACC masuk antrean utama bengkel!");
+      const usersRef = collection(db, "users");
+      const qMech = query(usersRef, where("role", "==", "mechanic"));
+      const snap = await getDocs(qMech);
+      
+      const list = snap.docs.map(d => {
+        const mechUid = d.id;
+        // METRIK WORKLOAD: Menghitung jumlah mobil riil yang sedang dikerjakan (processing) oleh mekanik terkait
+        const activeCarCount = currentTickets.filter(t => t.mechanicId === mechUid && t.status === "processing").length;
+        return { uid: mechUid, ...d.data(), activeWorkload: activeCarCount };
+      }).filter(m => m.isActive !== false);
+
+      setMechanics(list);
     } catch (err) {
-      alert(`Gagal ACC tiket: ${err.message}`);
+      console.error("Gagal memuat kompetensi beban kerja mekanik:", err.message);
     }
   };
 
-  // FITUR AKSIONER B: SUBMIT DELEGASI MEKANIK LAPANGAN
-  const handleAssignMechanicToCar = async (mechanicUid) => {
-    if (!selectedTicketForMechanic) return;
-    
+  // CALLBACK A: SUBMIT ACC TIKET + KALKULASI TARGET SELESAI ABSOLUT TIMESTAMP
+  const handleConfirmApproval = async (targetTicket, estimationValue, estimationUnit) => {
+    try {
+      const targetDocRef = doc(db, "serviceTickets", targetTicket.docId);
+      
+      // Menghitung target penanggalan selesai riil di server
+      const targetDate = new Date();
+      if (estimationUnit === "Jam") {
+        targetDate.setHours(targetDate.getHours() + estimationValue);
+      } else {
+        targetDate.setDate(targetDate.getDate() + estimationValue);
+      }
+      
+      await updateDoc(targetDocRef, { 
+        status: "waiting",
+        estimationValue: estimationValue,
+        estimationUnit: estimationUnit,
+        targetCompletionTime: targetDate // Otomatis disimpan sebagai Firebase Timestamp objek absolut
+      });
+
+      alert(`Tiket ${targetTicket.ticketId} berhasil disetujui.`);
+      setApproveTicket(null);
+    } catch (err) { alert(`Gagal memproses persetujuan: ${err.message}`); }
+  };
+
+  // CALLBACK B: SUBMIT REJECT JALUR GANDA (TOLAK TOTAL ATAU WAITING OFFER ALTERNATIF)
+  const handleConfirmRejection = async (targetTicket, rejectionType, alternativeDateTime) => {
+    try {
+      const targetDocRef = doc(db, "serviceTickets", targetTicket.docId);
+      
+      if (rejectionType === "offer" && alternativeDateTime) {
+        const offerDateObject = new Date(alternativeDateTime);
+        
+        // Statuswaiting_offer memicu pop-up pilihan interaksi di handphone konsumen
+        await updateDoc(targetDocRef, {
+          status: "waiting_offer",
+          offeredAlternativeTime: offerDateObject
+        });
+        alert(`Penawaran jadwal alternatif berhasil dikirim ke perangkat konsumen.`);
+      } else {
+        // Alur penolakan permanen pembatalan antrean
+        await updateDoc(targetDocRef, { status: "rejected" });
+        alert(`Tiket ${targetTicket.ticketId} berhasil dibatalkan secara permanen.`);
+      }
+      setRejectTicket(null);
+    } catch (err) { alert(`Gagal memproses pembatalan: ${err.message}`); }
+  };
+
+  // CALLBACK C: SUBMIT DELEGASI TUGAS MEKANIK
+  const handleConfirmAssignment = async (targetTicket, mechanicUid) => {
     const targetMechanicObj = mechanics.find(m => m.uid === mechanicUid);
     if (!targetMechanicObj) return;
 
     try {
-      console.log(`Firestore Mutation: Mendelegasikan mekanik [${targetMechanicObj.name}] ke tiket...`);
-      const targetDocRef = doc(db, "serviceTickets", selectedTicketForMechanic.docId);
-      
-      // Update status otomatis beralih ke 'processing' (Mekanik Mulai Kerja)
+      const targetDocRef = doc(db, "serviceTickets", targetTicket.docId);
       await updateDoc(targetDocRef, {
         mechanicId: mechanicUid,
         mechanicName: targetMechanicObj.name,
         status: "processing"
       });
-
-      setSelectedTicketForMechanic(null);
-      alert(`Mekanik ${targetMechanicObj.name} resmi ditugaskan ke unit kendaraan!`);
-    } catch (err) {
-      alert(`Gagal menugaskan mekanik: ${err.message}`);
-    }
+      alert(`Teknisi ${targetMechanicObj.name} resmi didelegasikan.`);
+      setAssignTicket(null);
+    } catch (err) { alert(`Gagal mendelegasikan teknisi: ${err.message}`); }
   };
 
   const formatRupiah = (num) => {
     return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(num);
+  };
+
+  const handleResetAllDialogs = () => {
+    setApproveTicket(null);
+    setRejectTicket(null);
+    setAssignTicket(null);
   };
 
   return (
@@ -173,15 +220,15 @@ export default function DashboardOverview() {
         </div>
       </div>
 
-      {/* Live Status Monitor */}
+      {/* Live Status Monitor Table */}
       <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
         <div>
           <h4 className="text-base font-semibold text-white">Live Status Monitor</h4>
-          <p className="text-xs text-slate-500 mt-0.5">Sinkronisasi langsung dengan pergerakan montir otomotif di kolong mobil.</p>
+          <p className="text-xs text-slate-500 mt-0.5">Sistem kendali verifikasi persetujuan antrean loket dan pendelegasian teknisi otomotif.</p>
         </div>
         
         {isLoading ? (
-          <div className="py-12 text-center text-xs text-slate-500 animate-pulse">Membuka gerbang sinkronisasi live data stream...</div>
+          <div className="py-12 text-center text-xs text-slate-500 animate-pulse">Sinkronisasi data operasional sedang berlangsung...</div>
         ) : liveTickets.length === 0 ? (
           <div className="py-14 flex flex-col items-center justify-center text-center">
             <p className="text-sm font-medium text-slate-400">Belum ada antrean aktif saat ini</p>
@@ -193,10 +240,11 @@ export default function DashboardOverview() {
                 <tr className="border-b border-slate-800 bg-slate-900/40 text-slate-500 font-semibold uppercase tracking-wider">
                   <th className="px-5 py-3">ID Tiket</th>
                   <th className="px-5 py-3">No. Pelat Kendaraan</th>
-                  <th className="px-5 py-3">Unit Mobil / Tindakan</th>
-                  <th className="px-5 py-3">Mekanik Bertugas</th>
-                  <th className="px-5 py-3 text-center">Status</th>
-                  <th className="px-5 py-3 text-center">Aksi Management</th>
+                  <th className="px-5 py-3">Unit Kendaraan / Tindakan</th>
+                  <th className="px-5 py-3">Estimasi / Opsi Alternatif</th>
+                  <th className="px-5 py-3">Teknisi Penanggung Jawab</th>
+                  <th className="px-5 py-3 text-center">Status Operasional</th>
+                  <th className="px-5 py-3 text-center">Aksi Manajemen Antrean</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-900 text-slate-400 font-medium">
@@ -205,44 +253,52 @@ export default function DashboardOverview() {
                     <td className="px-5 py-3.5 font-mono font-bold text-slate-200">{ticket.ticketId}</td>
                     <td className="px-5 py-3.5">
                       <span className="bg-slate-900 border border-slate-800 text-white font-mono font-bold px-2 py-0.5 rounded text-[11px] tracking-wide">
-                        {ticket.carDetails?.plate || ticket.plateNumber || "AD 1234 XX"}
+                        {ticket.carDetails?.plate || ticket.plateNumber || "-"}
                       </span>
                     </td>
                     <td className="px-5 py-3.5 text-slate-200">
                       {ticket.carDetails ? `${ticket.carDetails.brand} ${ticket.carDetails.type}` : "Walk-In Manual"}
                     </td>
+                    <td className="px-5 py-3.5 text-slate-400">
+                      {ticket.status === "rejected" ? (
+                        <span className="text-rose-500/70 font-semibold">Ditolak Permanen</span>
+                      ) : ticket.status === "waiting_offer" ? (
+                        <span className="text-purple-400">Tawaran: {ticket.offeredAlternativeTime?.seconds ? new Date(ticket.offeredAlternativeTime.seconds * 1000).toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "-"}</span>
+                      ) : (
+                        <span>Durasi: {ticket.estimationValue ? `${ticket.estimationValue} ${ticket.estimationUnit}` : <span className="text-slate-600 italic">Belum Diatur</span>}</span>
+                      )}
+                    </td>
                     <td className="px-5 py-3.5 text-slate-300">
                       <div className="flex items-center gap-1.5">
-                        <FiUser className="text-slate-600" /> {ticket.mechanicName || <span className="text-slate-600 italic">Belum Ada</span>}
+                        <FiUser className="text-slate-600" /> {ticket.mechanicName || <span className="text-slate-600 italic">Belum Ditunjuk</span>}
                       </div>
                     </td>
                     <td className="px-5 py-3.5 text-center">
                       {ticket.status === "pending" ? (
-                        <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-purple-500/10 text-purple-400 border border-purple-500/20 animate-pulse">Booking Baru</span>
+                        <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-purple-500/10 text-purple-400 border border-purple-500/20 animate-pulse">Menunggu Verifikasi</span>
                       ) : ticket.status === "processing" ? (
-                        <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20 animate-pulse">Servis Berjalan</span>
+                        <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20 animate-pulse">Sedang Dikerjakan</span>
+                      ) : ticket.status === "rejected" ? (
+                        <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20">Antrean Ditolak</span>
+                      ) : ticket.status === "waiting_offer" ? (
+                        <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-purple-500/10 text-purple-400 border border-purple-500/20 animate-pulse">Menawarkan Jadwal</span>
                       ) : (
                         <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">Dalam Antrean</span>
                       )}
                     </td>
                     <td className="px-5 py-3.5 text-center flex items-center justify-center gap-2">
                       {ticket.status === "pending" && (
-                        <button
-                          onClick={() => handleVerifyAndApproveQueue(ticket.docId)}
-                          className="px-2 py-1 rounded bg-purple-600 hover:bg-purple-500 text-white font-bold tracking-wide text-[10px] transition cursor-pointer flex items-center gap-0.5"
-                        >
-                          <FiCheck /> ACC
-                        </button>
+                        <>
+                          <button onClick={() => setApproveTicket(ticket)} className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[10px] cursor-pointer transition flex items-center gap-0.5">ACC</button>
+                          <button onClick={() => setRejectTicket(ticket)} className="px-2.5 py-1 rounded bg-slate-950 border border-rose-500/30 hover:bg-rose-600 text-rose-400 hover:text-white font-bold text-[10px] cursor-pointer transition">Tolak</button>
+                        </>
                       )}
-                      {ticket.status !== "processing" && (
-                        <button
-                          onClick={() => setSelectedTicketForMechanic(ticket)}
-                          className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-blue-400 hover:text-blue-300 font-bold text-[10px] border border-slate-700 transition cursor-pointer flex items-center gap-1"
-                        >
-                          <FiUserPlus /> Assign Montir
-                        </button>
+                      {ticket.status === "waiting" && (
+                        <button onClick={() => setAssignTicket(ticket)} className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-blue-400 hover:text-blue-300 font-bold text-[10px] border border-slate-700 transition cursor-pointer flex items-center gap-1">Tugaskan Teknisi</button>
                       )}
-                      {ticket.status === "processing" && <span className="text-[11px] text-slate-600 italic">Mekanik Lapangan Kerja</span>}
+                      {ticket.status === "waiting_offer" && <span className="text-[11px] text-purple-400/70 italic font-medium">Menunggu Klien</span>}
+                      {ticket.status === "processing" && <span className="text-[11px] text-slate-600 italic">Mekanik Bekerja</span>}
+                      {ticket.status === "rejected" && <span className="text-[11px] text-rose-500/60 font-medium">Dibatalkan</span>}
                     </td>
                   </tr>
                 ))}
@@ -252,36 +308,16 @@ export default function DashboardOverview() {
         )}
       </div>
 
-      {/* MODAL JENDELA PILIHAN MEKANIK ACTIVE */}
-      {selectedTicketForMechanic && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-sm p-6 relative shadow-2xl">
-            <button onClick={() => setSelectedTicketForMechanic(null)} className="absolute right-5 top-5 p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"><FiX size={18} /></button>
-            <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-1">Delegasi Tugas Mekanik</h3>
-            <p className="text-xs text-slate-500 mb-4">Pilih teknisi untuk menangani unit kendaraan <span className="text-white font-mono font-bold">{selectedTicketForMechanic.carDetails?.plate || selectedTicketForMechanic.plateNumber}</span></p>
-            
-            <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-              {mechanics.length === 0 ? (
-                <p className="text-xs text-slate-600 text-center py-4">Tidak ada akun mekanik aktif yang terdeteksi di server cloud.</p>
-              ) : (
-                mechanics.map((mech) => (
-                  <div
-                    key={mech.uid}
-                    onClick={() => handleAssignMechanicToCar(mech.uid)}
-                    className="p-3 bg-slate-950 hover:bg-blue-600/10 border border-slate-800 hover:border-blue-500/40 rounded-xl flex items-center justify-between cursor-pointer transition text-xs"
-                  >
-                    <div>
-                      <p className="font-semibold text-white">{mech.name}</p>
-                      <p className="text-[10px] text-slate-500 mt-0.5">{mech.email}</p>
-                    </div>
-                    <span className="text-[10px] font-bold text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">Pilih →</span>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <QueueActionModal
+        approveTicket={approveTicket}
+        rejectTicket={rejectTicket}
+        assignTicket={assignTicket}
+        mechanics={mechanics}
+        onClose={handleResetAllDialogs}
+        onConfirmApprove={handleConfirmApproval}
+        onConfirmReject={handleConfirmRejection}
+        onConfirmAssign={handleConfirmAssignment}
+      />
 
     </div>
   );
