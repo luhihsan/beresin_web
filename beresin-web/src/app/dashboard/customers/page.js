@@ -6,7 +6,6 @@ import { BsQrCode } from "react-icons/bs";
 import { db } from "../../lib/client";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import AddTicketModal from "./AddTicketModal";
-import CarHistoryDetail from "./CarHistoryDetail";  
 
 export default function CustomersManagement() {
   const [customers, setCustomers] = useState([]);
@@ -382,11 +381,11 @@ export default function CustomersManagement() {
                         <p className="text-slate-500 font-medium uppercase tracking-wider text-[10px]">Odometer</p>
                         <p className="text-slate-300 font-medium font-mono text-sm">{(history.kmCheckIn || 0).toLocaleString()} KM Masuk</p>
                       </div>
-                      <div className="bg-slate-900/50 p-3 rounded-xl border border-slate-800/40 space-y-1 flex flex-col justify-center">
+                      <div className="bg-slate-950/20 border border-slate-800/60 p-3 rounded-xl space-y-1 flex flex-col justify-center">
                         <p className="text-slate-500 font-medium uppercase tracking-wider text-[10px]">Mekanik Bertugas</p>
                         <p className="text-white font-semibold text-sm mt-0.5">{history.mechanicName || "Belum Ditunjuk"}</p>
                       </div>
-                      <div className="bg-slate-900/50 p-3 rounded-xl border border-slate-800/40 space-y-1 flex flex-col justify-center md:col-span-2">
+                      <div className="bg-slate-950/20 border border-slate-800/60 p-3 rounded-xl space-y-1 flex flex-col justify-center md:col-span-2">
                         <p className="text-slate-500 font-medium uppercase tracking-wider text-[10px]">Total Tagihan</p>
                         <p className="text-emerald-400 font-bold font-mono text-base mt-0.5">{formatRupiah(history.invoiceAmount || 0)}</p>
                       </div>
@@ -410,8 +409,45 @@ export default function CustomersManagement() {
                       </div>
                     )}
 
-                    {/* --- INTEGRASI SUB-KOMPONEN BARU DI SINI (Card Bagian Paling Bawah) --- */}
-                    <CarHistoryDetail ticket={history} />
+                    {/* --- REKTIFIKASI INLINE: INFORMASI COMPLAINT LAMA DIHAPUS, BERGANTI JADI NOTA SPART EKSLUSIF --- */}
+                    {history.externalProcurements && history.externalProcurements.length > 0 && (
+                      <div className="pt-4 space-y-2 border-t border-slate-900 mt-4 animate-fade-in">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                          Rincian Suku Cadang & Nota Belanja Mekanik ({history.externalProcurements.length})
+                        </p>
+                        <div className="bg-slate-900/40 rounded-xl border border-slate-800/60 divide-y divide-slate-800/40 overflow-hidden">
+                          {history.externalProcurements.map((proc, index) => (
+                            <div key={index} className="p-3.5 flex items-center justify-between text-xs sm:text-sm hover:bg-slate-800/20 transition duration-150">
+                              <div className="space-y-1">
+                                <span className="font-semibold text-slate-200 block">{proc.partName}</span>
+                                <div className="text-slate-500 text-[11px]">
+                                  <span>Toko / Supplier: <strong className="text-slate-400">{proc.supplierStore || "-"}</strong></span>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-4">
+                                <span className="font-mono text-emerald-400 font-bold text-sm sm:text-base">
+                                  Rp {proc.cost?.toLocaleString("id-ID") || "0"}
+                                </span>
+                                {proc.receiptPhotoUrl ? (
+                                  <a 
+                                    href={proc.receiptPhotoUrl} 
+                                    target="_blank" 
+                                    rel="noopener noreferrer" 
+                                    className="text-blue-400 hover:text-blue-300 font-bold bg-blue-500/10 px-2.5 py-1.5 rounded-xl border border-blue-500/20 transition text-xs shadow-lg shadow-blue-500/5"
+                                  >
+                                    Lihat Nota ↗
+                                  </a>
+                                ) : (
+                                  <span className="text-slate-600 italic text-xs px-2.5 py-1 bg-slate-950/30 rounded-lg border border-slate-900">
+                                    Tanpa Nota
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                   </div>
                 </div>
