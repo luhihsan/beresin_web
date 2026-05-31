@@ -3,11 +3,10 @@
 import { useState, useEffect } from "react";
 import { FiX, FiPhone, FiSmartphone, FiChevronRight, FiClock, FiFileText, FiUser, FiImage } from "react-icons/fi";
 import { BsQrCode } from "react-icons/bs";
-// IMPORT KONEKSI CORE FIRESTORE ASLI
 import { db } from "../../lib/client";
 import { collection, getDocs, query, where } from "firebase/firestore";
-// IMPORT COMPONENT MODAL TERPISAH
 import AddTicketModal from "./AddTicketModal";
+import CarHistoryDetail from "./CarHistoryDetail";  
 
 export default function CustomersManagement() {
   const [customers, setCustomers] = useState([]);
@@ -410,6 +409,10 @@ export default function CustomersManagement() {
                         </div>
                       </div>
                     )}
+
+                    {/* --- INTEGRASI SUB-KOMPONEN BARU DI SINI (Card Bagian Paling Bawah) --- */}
+                    <CarHistoryDetail ticket={history} />
+
                   </div>
                 </div>
               ))}

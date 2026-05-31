@@ -2,11 +2,10 @@
 
 import { useState, useEffect } from "react";
 import { FiActivity, FiClock, FiTrendingUp, FiUser, FiCheck, FiUserPlus, FiX } from "react-icons/fi";
-// IMPORT KONEKSI CORE FIRESTORE ASLI
 import { db } from "../lib/client";
 import { collection, onSnapshot, query, where, orderBy, updateDoc, doc, getDocs } from "firebase/firestore";
-// IMPORT COMPONENTS MODAL PENANGGUNG JAWAB ALUR KERJA
 import QueueActionModal from "./QueueActionModal";
+import TicketDetailModal from "./TicketDetailModal";
 
 export default function DashboardOverview() {
   const [metrics, setMetrics] = useState({ todayCars: 0, waitingQueue: 0, monthlyRevenue: 0 });
@@ -14,10 +13,10 @@ export default function DashboardOverview() {
   const [mechanics, setMechanics] = useState([]); 
   const [isLoading, setIsLoading] = useState(true);
 
-  // STATE MANAJEMEN SELEKSI DATA TRANSFER KE PANEL MODAL
   const [approveTicket, setApproveTicket] = useState(null);
   const [rejectTicket, setRejectTicket] = useState(null);
   const [assignTicket, setAssignTicket] = useState(null);
+  const [selectedDetailTicket, setSelectedDetailTicket] = useState(null);
 
   useEffect(() => {
     console.log("Firestore Real-time: Membuka jalur onSnapshot stream listener...");
@@ -120,11 +119,15 @@ export default function DashboardOverview() {
         targetDate.setDate(targetDate.getDate() + estimationValue);
       }
       
+      // Mengamankan data array foto keluhan bawaan tiket agar tetap utuh saat di-update
+      const complaintPhotoUrls = targetTicket.complaintPhotoUrls || [];
+      
       await updateDoc(targetDocRef, { 
         status: "waiting",
         estimationValue: estimationValue,
         estimationUnit: estimationUnit,
-        targetCompletionTime: targetDate // Otomatis disimpan sebagai Firebase Timestamp objek absolut
+        targetCompletionTime: targetDate, // Otomatis disimpan sebagai Firebase Timestamp objek absolut
+        complaintPhotoUrls: complaintPhotoUrls // Memastikan data array foto keluhan tetap melekat erat pada dokumen
       });
 
       alert(`Tiket ${targetTicket.ticketId} berhasil disetujui.`);
@@ -162,10 +165,15 @@ export default function DashboardOverview() {
 
     try {
       const targetDocRef = doc(db, "serviceTickets", targetTicket.docId);
+      const complaintPhotoUrls = targetTicket.complaintPhotoUrls || [];
+      const tasks = targetTicket.tasks || "Cek kerusakan kendaraan";
+
       await updateDoc(targetDocRef, {
         mechanicId: mechanicUid,
         mechanicName: targetMechanicObj.name,
-        status: "processing"
+        status: "processing",
+        complaintPhotoUrls: complaintPhotoUrls, // Meneruskan array foto keluhan pelanggan ke mekanik secara eksplisit
+        tasks: tasks // Meneruskan keterangan penugasan komplit
       });
       alert(`Teknisi ${targetMechanicObj.name} resmi didelegasikan.`);
       setAssignTicket(null);
@@ -180,6 +188,7 @@ export default function DashboardOverview() {
     setApproveTicket(null);
     setRejectTicket(null);
     setAssignTicket(null);
+    setSelectedDetailTicket(null); // Memastikan state detail juga bersih saat di-reset
   };
 
   return (
@@ -250,7 +259,15 @@ export default function DashboardOverview() {
               <tbody className="divide-y divide-slate-900 text-slate-400 font-medium">
                 {liveTickets.map((ticket) => (
                   <tr key={ticket.docId} className="hover:bg-slate-800/30 transition duration-150">
-                    <td className="px-5 py-3.5 font-mono font-bold text-slate-200">{ticket.ticketId}</td>
+                    <td className="px-5 py-3.5 whitespace-nowrap font-medium">
+                      <button 
+                        onClick={() => setSelectedDetailTicket(ticket)}
+                        className="text-blue-400 hover:text-blue-300 hover:underline text-left font-mono font-bold"
+                        title="Klik untuk lihat detail komplit"
+                      >
+                        {ticket.ticketId}
+                      </button>
+                    </td>
                     <td className="px-5 py-3.5">
                       <span className="bg-slate-900 border border-slate-800 text-white font-mono font-bold px-2 py-0.5 rounded text-[11px] tracking-wide">
                         {ticket.carDetails?.plate || ticket.plateNumber || "-"}
@@ -318,6 +335,14 @@ export default function DashboardOverview() {
         onConfirmReject={handleConfirmRejection}
         onConfirmAssign={handleConfirmAssignment}
       />
+
+      {/* --- REKTIFIKASI INTEGRASI MODAL DETAIL (DI SINI TEMPATNYA) --- */}
+      {selectedDetailTicket && (
+        <TicketDetailModal 
+          ticket={selectedDetailTicket} 
+          onClose={() => setSelectedDetailTicket(null)} 
+        />
+      )}
 
     </div>
   );

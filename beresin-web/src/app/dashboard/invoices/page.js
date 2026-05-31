@@ -4,10 +4,8 @@ import { useState, useEffect } from "react";
 import { FiFileText, FiDollarSign, FiCreditCard, FiCheckCircle, FiXCircle, FiDownload, FiSearch, FiEye, FiFilter } from "react-icons/fi";
 // IMPORT UTILITY EKSPOR LAPORAN
 import { exportInvoicesToCSV } from "../../utils/exportHelper";
-// IMPORT KONEKSI DATABASE FIRESTORE ASLI LU
 import { db } from "../../lib/client";
 import { collection, getDocs, updateDoc, doc } from "firebase/firestore";
-// SUNTIKAN COMPONENT MODAL DETAIL TERPISAH DARI FILE LOKAL SEBELAH
 import InvoiceDetailModal from "./InvoiceDetailModal";
 
 export default function InvoicesManagement() {
