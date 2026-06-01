@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { FiActivity, FiClock, FiTrendingUp, FiUser, FiCheck, FiUserPlus, FiX } from "react-icons/fi";
+import { FiActivity, FiClock, FiTrendingUp, FiUser } from "react-icons/fi";
 import { db } from "../lib/client";
 import { collection, onSnapshot, query, where, orderBy, updateDoc, doc, getDocs } from "firebase/firestore";
 import QueueActionModal from "./QueueActionModal";
@@ -34,6 +34,25 @@ export default function DashboardOverview() {
           ...doc.data()
         }));
 
+        // AUTOMATION BACKGROUND ENGINE: Mengubah otomatis tiket waiting_offer yang habis masa antreannya ke status waiting
+        allTickets.forEach(async (ticket) => {
+          if (ticket.status === "waiting_offer" && ticket.offeredAlternativeTime) {
+            const offerTime = ticket.offeredAlternativeTime.seconds 
+              ? new Date(ticket.offeredAlternativeTime.seconds * 1000) 
+              : new Date(ticket.offeredAlternativeTime);
+              
+            if (new Date() >= offerTime) {
+              try {
+                const targetDocRef = doc(db, "serviceTickets", ticket.docId);
+                await updateDoc(targetDocRef, { status: "waiting" });
+                console.log(`Auto-Update Antrean: Masa tunggu tiket ${ticket.ticketId} selesai. Status naik ke 'waiting'.`);
+              } catch (err) {
+                console.error("Gagal melakukan otomatisasi transisi status antrean:", err.message);
+              }
+            }
+          }
+        });
+
         const todayString = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
 
         const todayCarsCount = allTickets.filter(ticket => {
@@ -43,7 +62,6 @@ export default function DashboardOverview() {
 
         const waitingCount = allTickets.filter(ticket => ticket.status === "waiting" || ticket.status === "pending" || ticket.status === "waiting_offer").length;
         
-        // Memasukkan alur status transisi 'waiting_offer' ke monitor sistem kasir utama agar real-time terpantau
         const activeQueueList = allTickets.filter(ticket => 
           ticket.status === "pending" || ticket.status === "waiting" || ticket.status === "waiting_offer" || ticket.status === "processing" || ticket.status === "rejected"
         );
@@ -95,7 +113,6 @@ export default function DashboardOverview() {
       
       const list = snap.docs.map(d => {
         const mechUid = d.id;
-        // METRIK WORKLOAD: Menghitung jumlah mobil riil yang sedang dikerjakan (processing) oleh mekanik terkait
         const activeCarCount = currentTickets.filter(t => t.mechanicId === mechUid && t.status === "processing").length;
         return { uid: mechUid, ...d.data(), activeWorkload: activeCarCount };
       }).filter(m => m.isActive !== false);
@@ -106,12 +123,9 @@ export default function DashboardOverview() {
     }
   };
 
-  // CALLBACK A: SUBMIT ACC TIKET + KALKULASI TARGET SELESAI ABSOLUT TIMESTAMP
   const handleConfirmApproval = async (targetTicket, estimationValue, estimationUnit) => {
     try {
       const targetDocRef = doc(db, "serviceTickets", targetTicket.docId);
-      
-      // Menghitung target penanggalan selesai riil di server
       const targetDate = new Date();
       if (estimationUnit === "Jam") {
         targetDate.setHours(targetDate.getHours() + estimationValue);
@@ -119,15 +133,14 @@ export default function DashboardOverview() {
         targetDate.setDate(targetDate.getDate() + estimationValue);
       }
       
-      // Mengamankan data array foto keluhan bawaan tiket agar tetap utuh saat di-update
       const complaintPhotoUrls = targetTicket.complaintPhotoUrls || [];
       
       await updateDoc(targetDocRef, { 
         status: "waiting",
         estimationValue: estimationValue,
         estimationUnit: estimationUnit,
-        targetCompletionTime: targetDate, // Otomatis disimpan sebagai Firebase Timestamp objek absolut
-        complaintPhotoUrls: complaintPhotoUrls // Memastikan data array foto keluhan tetap melekat erat pada dokumen
+        targetCompletionTime: targetDate, 
+        complaintPhotoUrls: complaintPhotoUrls 
       });
 
       alert(`Tiket ${targetTicket.ticketId} berhasil disetujui.`);
@@ -135,7 +148,6 @@ export default function DashboardOverview() {
     } catch (err) { alert(`Gagal memproses persetujuan: ${err.message}`); }
   };
 
-  // CALLBACK B: SUBMIT REJECT JALUR GANDA (TOLAK TOTAL ATAU WAITING OFFER ALTERNATIF)
   const handleConfirmRejection = async (targetTicket, rejectionType, alternativeDateTime) => {
     try {
       const targetDocRef = doc(db, "serviceTickets", targetTicket.docId);
@@ -143,14 +155,12 @@ export default function DashboardOverview() {
       if (rejectionType === "offer" && alternativeDateTime) {
         const offerDateObject = new Date(alternativeDateTime);
         
-        // Statuswaiting_offer memicu pop-up pilihan interaksi di handphone konsumen
         await updateDoc(targetDocRef, {
           status: "waiting_offer",
           offeredAlternativeTime: offerDateObject
         });
         alert(`Penawaran jadwal alternatif berhasil dikirim ke perangkat konsumen.`);
       } else {
-        // Alur penolakan permanen pembatalan antrean
         await updateDoc(targetDocRef, { status: "rejected" });
         alert(`Tiket ${targetTicket.ticketId} berhasil dibatalkan secara permanen.`);
       }
@@ -158,7 +168,6 @@ export default function DashboardOverview() {
     } catch (err) { alert(`Gagal memproses pembatalan: ${err.message}`); }
   };
 
-  // CALLBACK C: SUBMIT DELEGASI TUGAS MEKANIK
   const handleConfirmAssignment = async (targetTicket, mechanicUid) => {
     const targetMechanicObj = mechanics.find(m => m.uid === mechanicUid);
     if (!targetMechanicObj) return;
@@ -172,8 +181,8 @@ export default function DashboardOverview() {
         mechanicId: mechanicUid,
         mechanicName: targetMechanicObj.name,
         status: "processing",
-        complaintPhotoUrls: complaintPhotoUrls, // Meneruskan array foto keluhan pelanggan ke mekanik secara eksplisit
-        tasks: tasks // Meneruskan keterangan penugasan komplit
+        complaintPhotoUrls: complaintPhotoUrls, 
+        tasks: tasks 
       });
       alert(`Teknisi ${targetMechanicObj.name} resmi didelegasikan.`);
       setAssignTicket(null);
@@ -188,7 +197,7 @@ export default function DashboardOverview() {
     setApproveTicket(null);
     setRejectTicket(null);
     setAssignTicket(null);
-    setSelectedDetailTicket(null); // Memastikan state detail juga bersih saat di-reset
+    setSelectedDetailTicket(null); 
   };
 
   return (
@@ -259,10 +268,16 @@ export default function DashboardOverview() {
               <tbody className="divide-y divide-slate-900 text-slate-400 font-medium">
                 {liveTickets.map((ticket) => (
                   <tr key={ticket.docId} className="hover:bg-slate-800/30 transition duration-150">
-                    <td className="px-5 py-3.5 whitespace-nowrap font-medium">
+                    {/* ENHANCED CLICK ZONE: Memposisikan sel tabel di atas tumpukan layer render CSS */}
+                    <td className="px-5 py-3.5 whitespace-nowrap font-medium relative z-40">
                       <button 
-                        onClick={() => setSelectedDetailTicket(ticket)}
-                        className="text-blue-400 hover:text-blue-300 hover:underline text-left font-mono font-bold"
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setSelectedDetailTicket(ticket);
+                        }}
+                        className="text-blue-400 hover:text-blue-300 hover:underline text-left font-mono font-bold cursor-pointer inline-block w-full h-full min-h-[20px]"
                         title="Klik untuk lihat detail komplit"
                       >
                         {ticket.ticketId}
@@ -336,7 +351,6 @@ export default function DashboardOverview() {
         onConfirmAssign={handleConfirmAssignment}
       />
 
-      {/* --- REKTIFIKASI INTEGRASI MODAL DETAIL (DI SINI TEMPATNYA) --- */}
       {selectedDetailTicket && (
         <TicketDetailModal 
           ticket={selectedDetailTicket} 

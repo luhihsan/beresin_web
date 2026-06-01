@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { FiX, FiPhone, FiSmartphone, FiChevronRight, FiClock, FiFileText, FiUser, FiImage } from "react-icons/fi";
+import { FiX, FiPhone, FiSmartphone, FiChevronRight, FiClock, FiUser } from "react-icons/fi";
 import { BsQrCode } from "react-icons/bs";
 import { db } from "../../lib/client";
 import { collection, getDocs, query, where } from "firebase/firestore";
@@ -19,12 +19,16 @@ export default function CustomersManagement() {
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [selectedVehicle, setSelectedVehicle] = useState(null);
 
-  // STATE KONTROL UNTUK MODAL MODULAR TERPISAH
   const [isTicketModalOpen, setIsTicketModalOpen] = useState(false);
 
   useEffect(() => {
     fetchCustomersFromFirestore();
   }, []);
+
+  const getSafeImageUrl = (url) => {
+    if (!url) return "";
+    return url.replace("i.ibb.co", "i.ibb.co.com");
+  };
 
   const formatFirestoreDate = (rawDate) => {
     if (!rawDate) return "-";
@@ -34,12 +38,9 @@ export default function CustomersManagement() {
     return String(rawDate);
   };
 
-  // ENGINE LIVE AGGREGATION: Menghitung Jumlah Mobil Lintas Koleksi Secara Akurat
   const fetchCustomersFromFirestore = async () => {
     try {
       setIsLoadingCustomers(true);
-      console.log("Firestore CRM: Menarik data linier dari koleksi pelanggan...");
-      
       const customersRef = collection(db, "customers");
       const usersRef = collection(db, "users");
       const vehiclesRef = collection(db, "vehicles");
@@ -147,7 +148,6 @@ export default function CustomersManagement() {
     }
   };
 
-  // AMBIL MOBIL DARI DUA KOLEKSI MENGGUNAKAN SELURUH KELOMPOK ID
   const mt_fetchVehiclesForCustomer = async (customer) => {
     try {
       setIsLoadingVehicles(true);
@@ -197,7 +197,6 @@ export default function CustomersManagement() {
     }
   };
 
-  // SINKRONISASI TIKET RIWAYAT SERVIS GABUNGAN
   const fetchHistoryForVehicle = async (vehicleDocId) => {
     try {
       setIsLoadingHistory(true);
@@ -396,20 +395,20 @@ export default function CustomersManagement() {
                       <p className="text-slate-200 text-sm leading-relaxed mt-1">{history.tasks}</p>
                     </div>
 
+                    {/* --- REKTIFIKASI SINKRONISASI FILTER GAMBAR TIMELINE PELANGGAN --- */}
                     {history.complaintPhotoUrls && history.complaintPhotoUrls.length > 0 && (
                       <div className="pt-2 space-y-2">
                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">Foto Lampiran Keluhan ({history.complaintPhotoUrls.length})</p>
                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                           {history.complaintPhotoUrls.map((url, imgIdx) => (
-                            <a key={imgIdx} href={url} target="_blank" rel="noreferrer" className="group relative block aspect-video bg-slate-900 rounded-xl overflow-hidden border border-slate-800 hover:border-blue-500/50 transition">
-                              <img src={url} alt="Keluhan" className="w-full h-full object-cover group-hover:scale-105 transition duration-200" />
+                            <a key={imgIdx} href={getSafeImageUrl(url)} target="_blank" rel="noreferrer" className="group relative block aspect-video bg-slate-900 rounded-xl overflow-hidden border border-slate-800 hover:border-blue-500/50 transition">
+                              <img src={getSafeImageUrl(url)} alt="Keluhan" className="w-full h-full object-cover group-hover:scale-105 transition duration-200" />
                             </a>
                           ))}
                         </div>
                       </div>
                     )}
 
-                    {/* --- REKTIFIKASI INLINE: INFORMASI COMPLAINT LAMA DIHAPUS, BERGANTI JADI NOTA SPART EKSLUSIF --- */}
                     {history.externalProcurements && history.externalProcurements.length > 0 && (
                       <div className="pt-4 space-y-2 border-t border-slate-900 mt-4 animate-fade-in">
                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
@@ -430,7 +429,7 @@ export default function CustomersManagement() {
                                 </span>
                                 {proc.receiptPhotoUrl ? (
                                   <a 
-                                    href={proc.receiptPhotoUrl} 
+                                    href={getSafeImageUrl(proc.receiptPhotoUrl)} 
                                     target="_blank" 
                                     rel="noopener noreferrer" 
                                     className="text-blue-400 hover:text-blue-300 font-bold bg-blue-500/10 px-2.5 py-1.5 rounded-xl border border-blue-500/20 transition text-xs shadow-lg shadow-blue-500/5"

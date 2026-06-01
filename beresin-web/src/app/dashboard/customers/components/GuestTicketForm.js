@@ -10,11 +10,9 @@ export default function GuestTicketForm({ onCancel, onRefresh, customers = [] })
   const [photoPreview, setPhotoPreview] = useState("");
   const [isCameraActive, setIsCameraActive] = useState(false);
   
-  // PENANGKAP ALIRAN PERANGKAT MULTATABLE
   const streamRef = useRef(null);
   const videoRef = useRef(null);
   
-  // STATE SELEKSI PROFIL GUEST CRM LAMA
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [existingVehicles, setExistingVehicles] = useState([]);
   const [selectedVehicleId, setSelectedVehicleId] = useState("");
@@ -31,7 +29,6 @@ export default function GuestTicketForm({ onCancel, onRefresh, customers = [] })
     kmCheckIn: "", tasks: ""
   });
 
-  // CLEANUP GUARD: Mematikan paksa kelistrikan kamera saat komponen ditutup/unmount
   useEffect(() => {
     return () => {
       if (streamRef.current) {
@@ -41,7 +38,6 @@ export default function GuestTicketForm({ onCancel, onRefresh, customers = [] })
     };
   }, []);
 
-  // LOADER ENGINE: Membaca profil pelanggan tetap dan menarik relasi data mobil dari Firestore
   const handleCustomerProfileSelect = async (phoneId) => {
     setSelectedCustomerId(phoneId);
     setSelectedVehicleId("");
@@ -75,7 +71,6 @@ export default function GuestTicketForm({ onCancel, onRefresh, customers = [] })
     }
   };
 
-  // AUTO-POPULATE FIELD: Mengisi otomatis seluruh isian form dari data kendaraan lama
   const handleVehicleSelect = (vDocId) => {
     setSelectedVehicleId(vDocId);
     if (!vDocId) return;
@@ -173,20 +168,14 @@ export default function GuestTicketForm({ onCancel, onRefresh, customers = [] })
     let uploadedImageUrl = "";
 
     try {
-      // Jika ada lampiran foto, lakukan bypass upload ke ImgBB terlebih dahulu
       if (photoPreview) {
-        // Bersihkan prefix data URI jika ada ("data:image/jpeg;base64,") untuk menyisakan string base64 murni
         const base64RawString = photoPreview.split(",")[1] || photoPreview;
-
         const imgbbFormData = new FormData();
         imgbbFormData.append("image", base64RawString);
 
-        // --- BEST PRACTICE: AMBIL DARI ENVIRONMENT VARIABLES ---
         const IMGBB_API_KEY = process.env.NEXT_PUBLIC_IMGBB_API_KEY;
-        
-        // Guard checking jika sewaktu-waktu file .env.local belum dibuat atau salah ketik
         if (!IMGBB_API_KEY) {
-          throw new Error("API Key ImgBB tidak ditemukan. Pastikan sudah diatur di file .env.local dengan key NEXT_PUBLIC_IMGBB_API_KEY");
+          throw new Error("API Key ImgBB tidak ditemukan di file .env.local");
         }
         
         console.log("Next.js Client: Mengunggah berkas kompresi foto keluhan ke awan ImgBB...");
@@ -196,10 +185,8 @@ export default function GuestTicketForm({ onCancel, onRefresh, customers = [] })
         });
 
         const imgbbResult = await imgbbResponse.json();
-
         if (imgbbResult.success && imgbbResult.data?.url) {
           uploadedImageUrl = imgbbResult.data.url;
-          console.log("Next.js Client: Unggah sukses! Direct URL:", uploadedImageUrl);
         } else {
           throw new Error(imgbbResult.error?.message || "Respons API ImgBB gagal.");
         }
@@ -209,7 +196,6 @@ export default function GuestTicketForm({ onCancel, onRefresh, customers = [] })
       const uniqueCustomerUid = `guest_${phone}`;
       const timestampId = `SRV-${Date.now()}`;
       
-      // 1. Simpan dokumen profil ke koleksi 'customers' agar muncul di tabel utama CRM
       const customerDocRef = doc(db, "customers", phone);
       await setDoc(customerDocRef, {
         name: formData.customerName,
@@ -219,7 +205,6 @@ export default function GuestTicketForm({ onCancel, onRefresh, customers = [] })
         totalVehicles: 1 
       }, { merge: true });
 
-      // 2. Jika merupakan unit mobil baru, simpan ke koleksi kendaraan. Jika aset lama, gunakan ID yang sudah ada.
       let activeVehicleDocId = selectedVehicleId;
       if (!activeVehicleDocId) {
         const newVehicleRef = await addDoc(collection(db, "vehicles"), {
@@ -235,12 +220,12 @@ export default function GuestTicketForm({ onCancel, onRefresh, customers = [] })
         activeVehicleDocId = newVehicleRef.id;
       }
 
-      // 3. Terbit Lembar Kerja Antrean Operasional
+      // --- REKTIFIKASI UTAMA: UBAH STATUS MENJADI PENDING AGAR MASUK PROSES VERIFIKASI ---
       await addDoc(collection(db, "serviceTickets"), {
         ticketId: timestampId,
         customerUid: uniqueCustomerUid,
         mechanicId: "", mechanicName: "",
-        status: "waiting",
+        status: "pending", // <-- Status diubah dari "waiting" menjadi "pending"
         tasks: formData.tasks,
         kmCheckIn: Number(formData.kmCheckIn) || 0,
         kmService: 0, invoiceAmount: 0,
@@ -255,7 +240,7 @@ export default function GuestTicketForm({ onCancel, onRefresh, customers = [] })
         }
       });
 
-      alert("Berkas pendaftaran antrean dan rekam profil pelanggan berhasil disimpan.");
+      alert("Berkas pendaftaran antrean berhasil dikirim. Menunggu verifikasi loket.");
       onCancel();
       await onRefresh();
     } catch (err) { 
@@ -267,8 +252,6 @@ export default function GuestTicketForm({ onCancel, onRefresh, customers = [] })
 
   return (
     <div className="space-y-4 text-left">
-      
-      {/* PANEL DROPDOWN PENCARIAN PROFIL TERDAFTAR LAMA */}
       <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3">
         <div className="space-y-1.5 text-xs">
           <label className="font-semibold text-blue-400">Gunakan Profil Pelanggan Tetap Terdaftar (Opsional)</label>
