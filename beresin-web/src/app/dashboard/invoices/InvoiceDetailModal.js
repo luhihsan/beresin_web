@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { FiXCircle, FiEdit2, FiFileText, FiPlus, FiTrash2, FiSave, FiPaperclip, FiImage, FiCornerDownRight, FiSend, FiCheck } from "react-icons/fi";
+import { FiXCircle, FiEdit2, FiFileText, FiPlus, FiTrash2, FiSave, FiPaperclip, FiImage, FiCornerDownRight, FiSend, FiCheck, FiLayers } from "react-icons/fi";
 import { db } from "../../lib/client";
-import { updateDoc, doc } from "firebase/firestore";
+// IMPORT MASTER FIRESTORE UTILITY
+import { updateDoc, doc, collection, getDocs } from "firebase/firestore";
 
 export default function InvoiceDetailModal({
   invoice,
@@ -16,12 +17,16 @@ export default function InvoiceDetailModal({
   const [isEditing, setIsEditing] = useState(false);
   const [editableItems, setEditableItems] = useState([]);
   const [isSubmittingMutation, setIsSubmittingMutation] = useState(false);
+  
+  // STATE BARU: Menampung master katalog layanan jasa dari cloud
+  const [servicesCatalog, setServicesCatalog] = useState([]);
 
   const getSafeImageUrl = (url) => {
     if (!url) return "";
     return url.replace("i.ibb.co", "i.ibb.co.com");
   };
 
+  // EFFECT 1: Sinkronisasi pemetaan manifes item tagihan saat modal dibuka
   useEffect(() => {
     if (invoice) {
       const externalCostSum = invoice.externalProcurements?.reduce((acc, curr) => acc + (curr.cost || 0), 0) || 0;
@@ -34,11 +39,29 @@ export default function InvoiceDetailModal({
         }
       ];
       setEditableItems(defaultItemsManifest);
+      
+      // Jalankan fungsi fetch katalog jasa penunjang
+      fetchServicesCatalog();
     } else {
       setIsEditing(false);
       setEditableItems([]);
     }
   }, [invoice]);
+
+  // --- KONEKSI 1: FETCH DATA MASTER KATALOG JASA DARI FIRESTORE ---
+  const fetchServicesCatalog = async () => {
+    try {
+      const querySnapshot = await getDocs(collection(db, "services"));
+      const masterList = querySnapshot.docs.map(docSnapshot => ({
+        id: docSnapshot.id,
+        ...docSnapshot.data()
+      }));
+      setServicesCatalog(masterList);
+      console.log("Firestore Catalog: Master katalog layanan jasa berhasil dimuat.");
+    } catch (err) {
+      console.error("Gagal memuat master katalog jasa:", err.message);
+    }
+  };
 
   const handleAddNewBillingItem = () => {
     setEditableItems([...editableItems, { name: "", price: 0 }]);
@@ -120,7 +143,6 @@ export default function InvoiceDetailModal({
             <h3 className="text-base font-mono font-bold text-white mt-0.5">{invoice.id}</h3>
           </div>
           
-          {/* Menu Kustomisasi Jasa hanya terbuka jika Statusnya belum bayar */}
           {!invoice.isPaid && (
             <button
               onClick={() => setIsEditing(!isEditing)}
@@ -163,20 +185,56 @@ export default function InvoiceDetailModal({
             )}
           </div>
 
-          <div className="bg-slate-950 border border-slate-800/60 rounded-xl p-3 space-y-2.5">
+          <div className="bg-slate-950 border border-slate-800/60 rounded-xl p-3 space-y-3">
             {editableItems.map((item, idx) => (
-              <div key={idx} className="flex items-center gap-3 bg-slate-900/40 p-2 rounded-lg border border-slate-800/40">
+              <div key={idx} className="flex flex-col gap-2 bg-slate-900/40 p-2.5 rounded-xl border border-slate-800/40 w-full transition duration-150">
                 {isEditing ? (
                   <>
-                    <input type="text" value={item.name} required onChange={(e) => handleItemDataChange(idx, "name", e.target.value)} placeholder="Contoh: Ongkos Bongkar Set Kaki Depan" className="flex-1 px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white outline-none focus:ring-1 focus:ring-blue-500" />
-                    <div className="relative flex items-center w-28">
-                      <span className="absolute left-2.5 text-[10px] font-bold text-slate-600">Rp</span>
-                      <input type="number" value={item.price} onChange={(e) => handleItemDataChange(idx, "price", e.target.value)} className="w-full pl-7 pr-2 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-emerald-400 font-mono font-bold outline-none text-right" />
+                    {/* --- KONEKSI 2: DROPDOWN PILIHAN KATALOG JASA (AUTO FILL) --- */}
+                    <div className="relative flex items-center w-full">
+                      <FiLayers className="absolute left-2.5 text-slate-600" size={12} />
+                      <select
+                        onChange={(e) => {
+                          const targetId = e.target.value;
+                          if (!targetId) return;
+                          const selectedService = servicesCatalog.find(s => s.id === targetId);
+                          if (selectedService) {
+                            // Isi otomatis nama dan harga berdasarkan skema katalog masalamu
+                            handleItemDataChange(idx, "name", selectedService.name || selectedService.serviceName || "");
+                            handleItemDataChange(idx, "price", selectedService.price || 0);
+                          }
+                        }}
+                        className="w-full pl-8 pr-2 py-1.5 bg-slate-950 border border-slate-800/80 rounded-lg text-[11px] text-slate-400 outline-none cursor-pointer focus:border-blue-500/50"
+                        defaultValue=""
+                      >
+                        <option value="">-- Impor Jasa dari Katalog Master (Opsional) --</option>
+                        {servicesCatalog.map(service => (
+                          <option key={service.id} value={service.id}>
+                            {service.name || service.serviceName} ({formatRupiah(service.price || 0)})
+                          </option>
+                        ))}
+                      </select>
                     </div>
-                    <button type="button" onClick={() => handleRemoveBillingItem(idx)} className="text-slate-600 hover:text-rose-400 p-1 transition cursor-pointer"><FiTrash2 size={14} /></button>
+
+                    {/* KOLOM EDIT KUSTOM (TETAP DIPERTAHANKAN DAN BISA DIKETIK MANUAL) */}
+                    <div className="flex items-center gap-2.5 w-full">
+                      <input 
+                        type="text" 
+                        value={item.name} 
+                        required 
+                        onChange={(e) => handleItemDataChange(idx, "name", e.target.value)} 
+                        placeholder="Ketik deskripsi tindakan atau edit nama layanan jasa kustom..." 
+                        className="flex-1 px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white outline-none focus:ring-1 focus:ring-blue-500" 
+                      />
+                      <div className="relative flex items-center w-28">
+                        <span className="absolute left-2.5 text-[10px] font-bold text-slate-600">Rp</span>
+                        <input type="number" value={item.price} onChange={(e) => handleItemDataChange(idx, "price", e.target.value)} className="w-full pl-7 pr-2 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-emerald-400 font-mono font-bold outline-none text-right" />
+                      </div>
+                      <button type="button" onClick={() => handleRemoveBillingItem(idx)} className="text-slate-600 hover:text-rose-400 p-1 transition cursor-pointer"><FiTrash2 size={14} /></button>
+                    </div>
                   </>
                 ) : (
-                  <div className="w-full flex justify-between items-center text-xs">
+                  <div className="w-full flex justify-between items-center text-xs p-1">
                     <span className="text-slate-200 font-medium flex items-center gap-1.5">
                       <FiCornerDownRight className="text-slate-700" size={12} /> {item.name}
                     </span>
@@ -256,7 +314,6 @@ export default function InvoiceDetailModal({
                 <FiSave size={14} /> {isSubmittingMutation ? "Syncing..." : "Simpan Perubahan"}
               </button>
             ) : (
-              // DELEGASI LOGIKA MODAL PIPELINE BERTAHAP KE COMPONENT UTAMA
               !invoice.isPaid && (
                 !invoice.billSent ? (
                   <button onClick={() => { onClose(); onTriggerActionModal("send_bill", invoice); }} className="bg-purple-600 hover:bg-purple-500 text-white font-semibold py-2 px-4 rounded-xl text-xs transition cursor-pointer flex items-center gap-1"><FiSend size={12}/> Kirim Tagihan</button>
