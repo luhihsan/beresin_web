@@ -170,7 +170,41 @@ export default function GuestTicketForm({ onCancel, onRefresh, customers = [] })
     if (!finalBrand) return alert("Mohon tentukan merek kendaraan terlebih dahulu.");
 
     setIsSubmitting(true);
+    let uploadedImageUrl = "";
+
     try {
+      // Jika ada lampiran foto, lakukan bypass upload ke ImgBB terlebih dahulu
+      if (photoPreview) {
+        // Bersihkan prefix data URI jika ada ("data:image/jpeg;base64,") untuk menyisakan string base64 murni
+        const base64RawString = photoPreview.split(",")[1] || photoPreview;
+
+        const imgbbFormData = new FormData();
+        imgbbFormData.append("image", base64RawString);
+
+        // --- BEST PRACTICE: AMBIL DARI ENVIRONMENT VARIABLES ---
+        const IMGBB_API_KEY = process.env.NEXT_PUBLIC_IMGBB_API_KEY;
+        
+        // Guard checking jika sewaktu-waktu file .env.local belum dibuat atau salah ketik
+        if (!IMGBB_API_KEY) {
+          throw new Error("API Key ImgBB tidak ditemukan. Pastikan sudah diatur di file .env.local dengan key NEXT_PUBLIC_IMGBB_API_KEY");
+        }
+        
+        console.log("Next.js Client: Mengunggah berkas kompresi foto keluhan ke awan ImgBB...");
+        const imgbbResponse = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
+          method: "POST",
+          body: imgbbFormData,
+        });
+
+        const imgbbResult = await imgbbResponse.json();
+
+        if (imgbbResult.success && imgbbResult.data?.url) {
+          uploadedImageUrl = imgbbResult.data.url;
+          console.log("Next.js Client: Unggah sukses! Direct URL:", uploadedImageUrl);
+        } else {
+          throw new Error(imgbbResult.error?.message || "Respons API ImgBB gagal.");
+        }
+      }
+
       const phone = formData.customerPhone.trim();
       const uniqueCustomerUid = `guest_${phone}`;
       const timestampId = `SRV-${Date.now()}`;
@@ -210,7 +244,7 @@ export default function GuestTicketForm({ onCancel, onRefresh, customers = [] })
         tasks: formData.tasks,
         kmCheckIn: Number(formData.kmCheckIn) || 0,
         kmService: 0, invoiceAmount: 0,
-        complaintPhotoUrls: photoPreview ? [photoPreview] : [],
+        complaintPhotoUrls: uploadedImageUrl ? [uploadedImageUrl] : [],
         externalProcurements: [],
         createdAt: new Date(),
         date: new Date().toLocaleDateString("id-ID"),
@@ -224,7 +258,11 @@ export default function GuestTicketForm({ onCancel, onRefresh, customers = [] })
       alert("Berkas pendaftaran antrean dan rekam profil pelanggan berhasil disimpan.");
       onCancel();
       await onRefresh();
-    } catch (err) { alert(`Kegagalan transaksi data: ${err.message}`); } finally { setIsSubmitting(false); }
+    } catch (err) { 
+      alert(`Kegagalan transaksi data: ${err.message}`); 
+    } finally { 
+      setIsSubmitting(false); 
+    }
   };
 
   return (
